@@ -5,7 +5,7 @@ import type { Setting } from "#system/settings";
 import { SettingKeys, SettingType } from "#system/settings";
 import { BaseSettingsUiHandler } from "#ui/base-settings-ui-handler";
 import { getTextColor } from "#ui/text";
-import * as offlineBackup from "#system/offline/google-drive-backup";
+import * as backupManager from "#system/offline/backup-manager";
 
 /**
  * Scooom's "Offline" tab in the real Settings screen — sits alongside
@@ -13,15 +13,22 @@ import * as offlineBackup from "#system/offline/google-drive-backup";
  * documented extension point (append to `modes`/`labels`).
  *
  * Rows, in display order (locked ones grouped together):
- *   - Connect Google Account (always interactive)
+ *   - Backup Provider (always interactive — cycles Google Drive/Dropbox/...)
+ *   - Connect Account (always interactive)
  *   - Backup Save                    \
  *   - Restore Backup                  } locked until connected
  *   - Include Current Run (Off/On)   /
- *   - Drive Last Played (read-only, populates once connected — not
+ *   - Last Backup Played (read-only, populates once connected — not
  *     itself "locked", just shows a placeholder until there's something
  *     to show)
  *   - Clear All Data (always interactive — wiping local data has nothing
  *     to do with being connected)
+ *
+ * Every call in this file goes through `#system/offline/backup-manager`,
+ * never a specific provider module directly — the manager is what decides
+ * which provider ("Backup Provider" row) is currently active. See that
+ * module and `#system/offline/backup-provider` for the provider interface
+ * and anti-overwrite design.
  *
  * "Include Current Run" is a genuine two-option Setting (not activatable),
  * so its Left/Right cycling and persistence are entirely free — the base
@@ -47,7 +54,7 @@ const DAILY_SEED_DATE_KEY = "daily_seed_date";
 const DAILY_SEED_FETCHED_AT_KEY = "daily_seed_fetched_at";
 
 export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
-  /** Rows that get greyed out and made inert while signed out. */
+  /** Rows that get greyed out and made inert while the active provider isn't authenticated. */
   private static readonly LOCKABLE_KEYS = [
     SettingKeys.Offline_Backup_Save,
     SettingKeys.Offline_Restore_Backup,
@@ -55,8 +62,8 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   ];
 
   /**
-   * Rows that are always greyed out / inert, regardless of Google sign-in
-   * state — pure info rows for the daily seed cache, unrelated to Drive.
+   * Rows that are always greyed out / inert, regardless of sign-in state —
+   * pure info rows for the daily seed cache, unrelated to backups.
    */
   private static readonly ALWAYS_LOCKED_KEYS = [
     SettingKeys.Offline_Daily_Seed_Value,
@@ -75,7 +82,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   /**
    * True while a Connect press is in flight (or within the 1s post-settle
    * debounce window below) — prevents a double-tap from firing a second
-   * SocialLogin.login() call and spawning a second native account-chooser
+   * authenticate() call and spawning a second native/browser sign-in prompt
    * on top of the first.
    */
   private connectInProgress = false;
@@ -84,15 +91,15 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   private forceSeedInProgress = false;
 
   /**
-   * True once we've offered the "a backup was found on Drive, restore it?"
-   * prompt this session — static so it survives navigating away from and
-   * back to the Offline tab (a fresh instance is constructed per UiMode
-   * switch in some flows), but is NOT persisted across app relaunches,
-   * matching "invisible in normal operation" for a device that's already
-   * caught up. Set at the very start of the check (before any await), not
-   * after it resolves, so the two trigger paths below (explicit Connect
-   * press, and the silent tryRestoreSession() on tab open) can't both slip
-   * past a stale guard if they resolve close together.
+   * True once we've offered the "a backup was found, restore it?" prompt
+   * this session — static so it survives navigating away from and back to
+   * the Offline tab (a fresh instance is constructed per UiMode switch in
+   * some flows), but is NOT persisted across app relaunches, matching
+   * "invisible in normal operation" for a device that's already caught up.
+   * Set at the very start of the check (before any await), not after it
+   * resolves, so the two trigger paths below (explicit Connect press, and
+   * the silent tryRestoreSession() on tab open) can't both slip past a
+   * stale guard if they resolve close together.
    */
   private static hasOfferedRestorePrompt = false;
 
@@ -151,7 +158,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   }
 
   private applyLockedStyling(): void {
-    const locked = !offlineBackup.isSignedIn();
+    const locked = !backupManager.getActiveProvider().isAuthenticated();
     for (const key of OfflineSettingsUiHandler.LOCKABLE_KEYS) {
       this.setRowLocked(key, locked);
     }
@@ -228,15 +235,15 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
 
   /**
    * One-time-per-session prompt offered right after a successful sign-in
-   * (explicit Connect press, or the silent tab-open reconnect): if a backup
-   * already exists on Drive, ask whether to restore it now. This is the
-   * practical fix for a device that's never synced before (and so would
-   * otherwise just silently decline to auto-upload once it starts making
-   * progress) — it gives the player an easy, obvious way to catch up before
-   * ever reaching an auto-sync checkpoint. Still routes through the exact
-   * same manual restoreFromBackup() codepath as the "Restore Backup" button
-   * — loading remains a player decision, just offered rather than requiring
-   * the player to dig through Settings.
+   * (explicit Connect/provider-switch, or the silent tab-open reconnect): if
+   * a backup already exists on the active provider, ask whether to restore
+   * it now. This is the practical fix for a device that's never synced
+   * before (and so would otherwise just silently decline to auto-upload
+   * once it starts making progress) — it gives the player an easy, obvious
+   * way to catch up before ever reaching an auto-sync checkpoint. Still
+   * routes through the exact same manual restoreFromBackup() codepath as
+   * the "Restore Backup" button — loading remains a player decision, just
+   * offered rather than requiring the player to dig through Settings.
    *
    * No-ops (no dialog at all) if no backup exists — a first-time user
    * connecting for the first time should see nothing.
@@ -247,7 +254,9 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     }
     OfflineSettingsUiHandler.hasOfferedRestorePrompt = true;
 
-    offlineBackup
+    const providerName = backupManager.getActiveProvider().displayName;
+
+    backupManager
       .getRemoteLastPlayed()
       .then(lastPlayed => {
         if (!lastPlayed) {
@@ -255,7 +264,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
         }
         const ui = this.getUi();
         ui.showText(
-          `A backup was found on Google Drive (last played ${lastPlayed}). Restore it now? This will overwrite your current local save.`,
+          `A backup was found on ${providerName} (last played ${lastPlayed}). Restore it now? This will overwrite your current local save.`,
           null,
           () => {
             ui.setOverlayMode(
@@ -276,38 +285,41 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
         );
       })
       .catch(err => {
-        console.warn("Failed to check for an existing Drive backup to offer restoring:", err);
+        console.warn("Failed to check for an existing backup to offer restoring:", err);
       });
   }
 
-  /** Guard for the top of every action handler except Connect itself. */
+  /** Guard for the top of every action handler except Connect/Backup Provider themselves. */
   private requireSignedIn(): boolean {
-    if (offlineBackup.isSignedIn()) {
+    if (backupManager.getActiveProvider().isAuthenticated()) {
       return true;
     }
-    this.showText("Connect your Google account first.", 0, () => this.showText("", 0), 1500);
+    this.showText("Connect your account first.", 0, () => this.showText("", 0), 1500);
     return false;
   }
 
   private refreshDisplay(): void {
-    this.setRowText(SettingKeys.Offline_Google_Connect, offlineBackup.isSignedIn() ? "Connected" : "Not Connected");
+    const provider = backupManager.getActiveProvider();
+    this.setRowText(SettingKeys.Offline_Backup_Provider, provider.displayName);
+    this.setRowText(SettingKeys.Offline_Google_Connect, provider.isAuthenticated() ? "Connected" : "Not Connected");
+    this.setRowText(SettingKeys.Offline_Backup_Save, provider.displayName);
     this.applyLockedStyling();
   }
 
-  /** Fetches and displays the Drive backup's embedded save time — only meaningful once connected. */
-  private refreshDriveLastPlayed(): void {
-    if (!offlineBackup.isSignedIn()) {
+  /** Fetches and displays the active provider's backup's embedded save time — only meaningful once connected. */
+  private refreshLastBackupPlayed(): void {
+    if (!backupManager.getActiveProvider().isAuthenticated()) {
       this.setRowText(SettingKeys.Offline_Drive_Last_Played, "—");
       return;
     }
     this.setRowText(SettingKeys.Offline_Drive_Last_Played, "Checking…");
-    offlineBackup
+    backupManager
       .getRemoteLastPlayed()
       .then(lastPlayed => {
         this.setRowText(SettingKeys.Offline_Drive_Last_Played, lastPlayed ?? "No backup found");
       })
       .catch(err => {
-        console.error("Failed to fetch Drive last-played time:", err);
+        console.error("Failed to fetch last-played time:", err);
         this.setRowText(SettingKeys.Offline_Drive_Last_Played, "—");
       });
   }
@@ -319,21 +331,20 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     this.setRowText(SettingKeys.Offline_Restore_Backup, "Restore");
 
     this.refreshDisplay();
-    this.refreshDriveLastPlayed();
+    this.refreshLastBackupPlayed();
     this.refreshDailySeedInfo();
 
-    // Attempt a silent reconnect if we're not already signed in this
-    // session. On Electron this is fast and popup-free when a stored
-    // refresh token exists (see google-drive-backup.ts / main.cjs); it's a
-    // no-op if there's nothing stored. Fire-and-forget — show() itself stays
+    // Attempt a silent reconnect on the active provider if we're not already
+    // signed in this session. Fire-and-forget — show() itself stays
     // synchronous, the rows just update once this resolves.
-    if (!offlineBackup.isSignedIn()) {
+    const provider = backupManager.getActiveProvider();
+    if (!provider.isAuthenticated()) {
       this.setRowText(SettingKeys.Offline_Google_Connect, "Checking connection…");
-      offlineBackup
+      provider
         .tryRestoreSession()
         .then(restored => {
           this.refreshDisplay();
-          this.refreshDriveLastPlayed();
+          this.refreshLastBackupPlayed();
           if (restored) {
             this.offerRestorePromptIfNeeded();
           }
@@ -356,6 +367,9 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
    */
   protected override activateSetting(setting: Setting): boolean {
     switch (setting.key) {
+      case SettingKeys.Offline_Backup_Provider:
+        this.handleProviderCyclePress();
+        return true;
       case SettingKeys.Offline_Google_Connect:
         this.handleConnectPress();
         return true;
@@ -375,26 +389,54 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     return super.activateSetting(setting);
   }
 
+  /**
+   * Cycles to the next registered provider (see backup-manager.ts's
+   * getProviders() — adding a third provider later needs nothing else here,
+   * this just walks the list). Never triggers a network call by itself
+   * (switchProvider() is a pure local preference change); if the
+   * newly-active provider isn't authenticated yet, immediately starts its
+   * auth flow, same as pressing Connect directly — "selecting an
+   * unauthenticated provider starts its auth flow."
+   */
+  private handleProviderCyclePress(): void {
+    if (this.connectInProgress) {
+      return;
+    }
+
+    const providers = backupManager.getProviders();
+    const currentIndex = providers.findIndex(p => p.id === backupManager.getActiveProviderId());
+    const next = providers[(currentIndex + 1) % providers.length];
+
+    backupManager.switchProvider(next.id);
+    this.refreshDisplay();
+    this.refreshLastBackupPlayed();
+
+    if (!next.isAuthenticated()) {
+      this.handleConnectPress();
+    }
+  }
+
   private handleConnectPress(): void {
-    if (offlineBackup.isSignedIn() || this.connectInProgress) {
+    const provider = backupManager.getActiveProvider();
+    if (provider.isAuthenticated() || this.connectInProgress) {
       return;
     }
     this.connectInProgress = true;
     // Enforce a hard minimum lock on top of connectInProgress, so a fast
     // rejection can't be immediately re-tapped into spawning a second
-    // account-chooser before the UI's had a chance to settle.
+    // sign-in prompt before the UI's had a chance to settle.
     const unlockAt = Date.now() + 1000;
     this.setRowText(SettingKeys.Offline_Google_Connect, "Connecting…");
-    offlineBackup
-      .signIn()
+    provider
+      .authenticate()
       .then(() => {
         this.refreshDisplay();
-        this.refreshDriveLastPlayed();
+        this.refreshLastBackupPlayed();
         this.offerRestorePromptIfNeeded();
       })
       .catch(err => {
-        console.error("Google sign-in failed:", err);
-        this.showText("Google sign-in failed. Check the console for details.", 0, () => this.showText("", 0), 1500);
+        console.error("Sign-in failed:", err);
+        this.showText("Sign-in failed. Check the console for details.", 0, () => this.showText("", 0), 1500);
         this.refreshDisplay();
       })
       .finally(() => {
@@ -413,17 +455,18 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     if (!this.requireSignedIn()) {
       return;
     }
+    const providerName = backupManager.getActiveProvider().displayName;
     this.setRowText(SettingKeys.Offline_Backup_Save, "Backing up…");
-    offlineBackup
+    backupManager
       .backupSave()
       .then(() => {
-        this.setRowText(SettingKeys.Offline_Backup_Save, "Google Drive");
+        this.setRowText(SettingKeys.Offline_Backup_Save, providerName);
         this.showText("Backup complete.", 0, () => this.showText("", 0), 1500);
-        this.refreshDriveLastPlayed();
+        this.refreshLastBackupPlayed();
       })
       .catch(err => {
         console.error("Backup failed:", err);
-        this.setRowText(SettingKeys.Offline_Backup_Save, "Google Drive");
+        this.setRowText(SettingKeys.Offline_Backup_Save, providerName);
         this.showText("Backup failed. Check the console for details.", 0, () => this.showText("", 0), 1500);
       })
       .finally(() => {
@@ -441,9 +484,10 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
       return;
     }
 
+    const providerName = backupManager.getActiveProvider().displayName;
     const ui = this.getUi();
     ui.showText(
-      "This will overwrite your current save data with your Google Drive backup. Continue?",
+      `This will overwrite your current save data with your ${providerName} backup. Continue?`,
       null,
       () => {
         ui.setOverlayMode(
@@ -466,7 +510,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
 
   private performRestore(): void {
     this.setRowText(SettingKeys.Offline_Restore_Backup, "Restoring…");
-    offlineBackup
+    backupManager
       .restoreFromBackup()
       .then(() => {
         this.restoreComplete = true;
@@ -481,7 +525,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
 
   private handleClearDataPress(): void {
     // Deliberately NOT gated behind requireSignedIn() — wiping local data has
-    // nothing to do with being connected to Google.
+    // nothing to do with being connected to a backup provider.
     const ui = this.getUi();
     ui.showText(
       "This will ERASE ALL local data — save, settings, everything — and cannot be undone. Continue?",
@@ -511,7 +555,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   /**
    * Force-fetches the daily seed regardless of what's cached, overwriting
    * daily_seed / daily_seed_date / daily_seed_fetched_at on success. Not
-   * gated behind Google sign-in — this has nothing to do with Drive.
+   * gated behind sign-in — this has nothing to do with backups.
    * Deliberately does NOT go through title-phase.ts's handler; this is a
    * standalone refresh of the same cache that handler reads from.
    */

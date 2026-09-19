@@ -1,7 +1,7 @@
-import { isSafeToAutoUpload } from "#system/offline/google-drive-backup";
+import { isSafeToAutoUpload } from "#system/offline/backup-provider";
 import { describe, expect, it } from "vitest";
 
-describe("System - Offline - google-drive-backup", () => {
+describe("System - Offline - backup-provider", () => {
   describe("isSafeToAutoUpload", () => {
     it("is safe when no remote backup exists yet (nothing to overwrite)", () => {
       expect(isSafeToAutoUpload(null, null)).toBe(true);

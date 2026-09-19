@@ -16,6 +16,15 @@ const GOOGLE_CLIENT_ID = 'GOOGLE_DESKTOP_CLIENT_ID_PLACEHOLDER';
 const GOOGLE_CLIENT_SECRET = 'GOOGLE_DESKTOP_CLIENT_SECRET_PLACEHOLDER';
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 
+// Dropbox is a public PKCE client — no secret. Unlike Google, Dropbox does
+// NOT support a variable/wildcard loopback port for a desktop redirect URI:
+// it must match a value pre-registered in the Dropbox App Console exactly,
+// port included — see the plan doc's manual setup steps. Hence a fixed port
+// here instead of `getFreePort()`.
+const DROPBOX_APP_KEY = 'DROPBOX_APP_KEY_PLACEHOLDER';
+const DROPBOX_REDIRECT_PORT = 53682;
+const DROPBOX_REDIRECT_URI = `http://127.0.0.1:${DROPBOX_REDIRECT_PORT}/`;
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -59,12 +68,17 @@ app.on('activate', () => {
 // persisted-refresh-token form yet. Treat as a solid draft to verify.
 // ─────────────────────────────────────────────────────────────────────────
 
-const TOKEN_STORE_PATH = () => path.join(app.getPath('userData'), 'google-refresh-token.dat');
+// `provider` is a filename-safe id ("google" | "dropbox") — each provider's
+// refresh token is stored in its own file so signing out of one never
+// touches the other's stored connection.
+const tokenStorePath = provider => path.join(app.getPath('userData'), `${provider}-refresh-token.dat`);
+const TOKEN_STORE_PATH = () => tokenStorePath('google');
 
-function saveRefreshToken(refreshToken) {
+function saveRefreshToken(refreshToken, provider = 'google') {
+  const storePath = tokenStorePath(provider);
   try {
     if (safeStorage.isEncryptionAvailable()) {
-      fs.writeFileSync(TOKEN_STORE_PATH(), safeStorage.encryptString(refreshToken));
+      fs.writeFileSync(storePath, safeStorage.encryptString(refreshToken));
     } else {
       // Fallback for environments without an OS credential vault available
       // (e.g. a minimal Linux install with no gnome-keyring/kwallet running —
@@ -73,23 +87,24 @@ function saveRefreshToken(refreshToken) {
       console.warn(
         'safeStorage encryption is not available on this system — the refresh token will be stored ' +
           'in plain text at ' +
-          TOKEN_STORE_PATH() +
+          storePath +
           '. This is a fallback, not the intended behavior; if you see this on a normal desktop ' +
           'install, something about the OS credential vault setup is worth investigating.',
       );
-      fs.writeFileSync(TOKEN_STORE_PATH(), Buffer.from(refreshToken, 'utf8'));
+      fs.writeFileSync(storePath, Buffer.from(refreshToken, 'utf8'));
     }
   } catch (err) {
-    console.error('Failed to persist Google refresh token:', err);
+    console.error(`Failed to persist ${provider} refresh token:`, err);
   }
 }
 
-function loadRefreshToken() {
+function loadRefreshToken(provider = 'google') {
+  const storePath = tokenStorePath(provider);
   try {
-    if (!fs.existsSync(TOKEN_STORE_PATH())) {
+    if (!fs.existsSync(storePath)) {
       return null;
     }
-    const raw = fs.readFileSync(TOKEN_STORE_PATH());
+    const raw = fs.readFileSync(storePath);
     if (safeStorage.isEncryptionAvailable()) {
       try {
         return safeStorage.decryptString(raw);
@@ -101,18 +116,19 @@ function loadRefreshToken() {
     }
     return raw.toString('utf8');
   } catch (err) {
-    console.error('Failed to read stored Google refresh token:', err);
+    console.error(`Failed to read stored ${provider} refresh token:`, err);
     return null;
   }
 }
 
-function deleteStoredRefreshToken() {
+function deleteStoredRefreshToken(provider = 'google') {
+  const storePath = tokenStorePath(provider);
   try {
-    if (fs.existsSync(TOKEN_STORE_PATH())) {
-      fs.unlinkSync(TOKEN_STORE_PATH());
+    if (fs.existsSync(storePath)) {
+      fs.unlinkSync(storePath);
     }
   } catch (err) {
-    console.error('Failed to delete stored Google refresh token:', err);
+    console.error(`Failed to delete stored ${provider} refresh token:`, err);
   }
 }
 
@@ -171,14 +187,14 @@ function getFreePort() {
   });
 }
 
-/** POSTs to Google's token endpoint; returns the raw parsed JSON response. */
-function postTokenEndpoint(bodyParams) {
+/** POSTs to an OAuth token endpoint (Google's or Dropbox's); returns the raw parsed JSON response. */
+function postTokenEndpoint(hostname, path, bodyParams) {
   const body = new URLSearchParams(bodyParams).toString();
   return new Promise((resolve, reject) => {
     const req = https.request(
       {
-        hostname: 'oauth2.googleapis.com',
-        path: '/token',
+        hostname,
+        path,
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -207,7 +223,7 @@ function postTokenEndpoint(bodyParams) {
 
 /** Exchanges a stored refresh token for a fresh access token — no browser needed. */
 async function refreshAccessToken(refreshToken) {
-  const { status, body } = await postTokenEndpoint({
+  const { status, body } = await postTokenEndpoint('oauth2.googleapis.com', '/token', {
     client_id: GOOGLE_CLIENT_ID,
     client_secret: GOOGLE_CLIENT_SECRET,
     refresh_token: refreshToken,
@@ -246,7 +262,7 @@ async function interactiveSignIn() {
   await shell.openExternal(authUrl.toString());
   const code = await codePromise;
 
-  const { status, body } = await postTokenEndpoint({
+  const { status, body } = await postTokenEndpoint('oauth2.googleapis.com', '/token', {
     client_id: GOOGLE_CLIENT_ID,
     client_secret: GOOGLE_CLIENT_SECRET,
     code,
@@ -294,5 +310,94 @@ ipcMain.handle('google-has-stored-credentials', () => {
 
 ipcMain.handle('google-sign-out', () => {
   deleteStoredRefreshToken();
+  return true;
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Dropbox Sign-In — same loopback+PKCE shape as Google above, but Dropbox is
+// a public client (no client secret) and — critically — does NOT support a
+// variable/wildcard loopback port the way Google's redirect_uri validation
+// does; the redirect URI here must match one pre-registered in the Dropbox
+// App Console exactly, port included, hence the fixed DROPBOX_REDIRECT_PORT
+// instead of `getFreePort()`. `token_access_type=offline` is Dropbox's
+// equivalent of Google's `access_type=offline` — no `prompt=consent`
+// equivalent is needed, Dropbox returns a refresh_token on every
+// authorization by default once offline access is requested.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Exchanges a stored Dropbox refresh token for a fresh access token — no browser needed. */
+async function refreshDropboxAccessToken(refreshToken) {
+  const { status, body } = await postTokenEndpoint('api.dropboxapi.com', '/oauth2/token', {
+    client_id: DROPBOX_APP_KEY,
+    refresh_token: refreshToken,
+    grant_type: 'refresh_token',
+  });
+  if (status !== 200 || !body.access_token) {
+    throw new Error(`Dropbox refresh failed: ${JSON.stringify(body)}`);
+  }
+  return body.access_token;
+}
+
+/** Full interactive loopback+PKCE flow against Dropbox's fixed redirect URI. */
+async function interactiveDropboxSignIn() {
+  const { verifier, challenge } = makePkcePair();
+  const state = base64UrlEncode(crypto.randomBytes(16));
+
+  const authUrl = new URL('https://www.dropbox.com/oauth2/authorize');
+  authUrl.searchParams.set('client_id', DROPBOX_APP_KEY);
+  authUrl.searchParams.set('redirect_uri', DROPBOX_REDIRECT_URI);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('code_challenge', challenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+  authUrl.searchParams.set('token_access_type', 'offline');
+  authUrl.searchParams.set('state', state);
+
+  const codePromise = waitForAuthCode(DROPBOX_REDIRECT_PORT, state);
+  await shell.openExternal(authUrl.toString());
+  const code = await codePromise;
+
+  const { status, body } = await postTokenEndpoint('api.dropboxapi.com', '/oauth2/token', {
+    client_id: DROPBOX_APP_KEY,
+    code,
+    code_verifier: verifier,
+    grant_type: 'authorization_code',
+    redirect_uri: DROPBOX_REDIRECT_URI,
+  });
+
+  if (status !== 200 || !body.access_token) {
+    throw new Error(`Dropbox token exchange failed: ${JSON.stringify(body)}`);
+  }
+
+  if (body.refresh_token) {
+    saveRefreshToken(body.refresh_token, 'dropbox');
+  } else {
+    console.warn('Dropbox did not return a refresh_token — the connection will not survive an app restart.');
+  }
+
+  return body.access_token;
+}
+
+ipcMain.handle('dropbox-sign-in', async () => {
+  const storedRefreshToken = loadRefreshToken('dropbox');
+
+  if (storedRefreshToken) {
+    try {
+      return await refreshDropboxAccessToken(storedRefreshToken);
+    } catch (err) {
+      console.warn('Stored Dropbox credentials no longer work, falling back to interactive sign-in:', err.message);
+      deleteStoredRefreshToken('dropbox');
+      // fall through to interactive flow below
+    }
+  }
+
+  return interactiveDropboxSignIn();
+});
+
+ipcMain.handle('dropbox-has-stored-credentials', () => {
+  return loadRefreshToken('dropbox') !== null;
+});
+
+ipcMain.handle('dropbox-sign-out', () => {
+  deleteStoredRefreshToken('dropbox');
   return true;
 });

@@ -18,4 +18,9 @@ contextBridge.exposeInMainWorld('pkrOffline', {
 
   /** Forgets the stored connection entirely. */
   googleSignOut: () => ipcRenderer.invoke('google-sign-out'),
+
+  /** Dropbox equivalents of the three methods above — same "try stored, else interactive" shape. */
+  dropboxSignIn: () => ipcRenderer.invoke('dropbox-sign-in'),
+  hasStoredDropboxCredentials: () => ipcRenderer.invoke('dropbox-has-stored-credentials'),
+  dropboxSignOut: () => ipcRenderer.invoke('dropbox-sign-out'),
 });

@@ -121,6 +121,14 @@ jobs:
           sed -i '' "s/GOOGLE_DESKTOP_CLIENT_ID_PLACEHOLDER/${{ secrets.GOOGLE_DESKTOP_CLIENT_ID }}/g" pokerogue-src/main.cjs
           sed -i '' "s/GOOGLE_DESKTOP_CLIENT_SECRET_PLACEHOLDER/${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}/g" pokerogue-src/main.cjs
 
+      - name: Inject Dropbox App Key
+        run: |
+          if [ "${{ inputs.dev }}" = "true" ]; then
+            sed -i '' "s/DROPBOX_APP_KEY_PLACEHOLDER/${{ secrets.DROPBOX_APP_KEY_DEV }}/g" pokerogue-src/main.cjs
+          else
+            sed -i '' "s/DROPBOX_APP_KEY_PLACEHOLDER/${{ secrets.DROPBOX_APP_KEY }}/g" pokerogue-src/main.cjs
+          fi
+
       - name: Set electron main in package.json
         working-directory: pokerogue-src
         run: |

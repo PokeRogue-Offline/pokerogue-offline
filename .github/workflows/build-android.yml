@@ -64,6 +64,16 @@ jobs:
             sed -i "s/BUILD_NUMBER_PLACEHOLDER/${BUILD_NUM}/g" pokerogue-src/src/ui/handlers/title-ui-handler.ts
           fi
 
+      - name: Inject Dropbox App Key and redirect URI
+        run: |
+          if [ "${{ inputs.dev }}" = "true" ]; then
+            sed -i "s/DROPBOX_APP_KEY_PLACEHOLDER/${{ secrets.DROPBOX_APP_KEY_DEV }}/g" pokerogue-src/src/system/offline/dropbox-backup.ts
+            sed -i "s#DROPBOX_REDIRECT_URI_PLACEHOLDER#xyz.scooom.pkrdev://dropbox-auth-callback#g" pokerogue-src/src/system/offline/dropbox-backup.ts
+          else
+            sed -i "s/DROPBOX_APP_KEY_PLACEHOLDER/${{ secrets.DROPBOX_APP_KEY }}/g" pokerogue-src/src/system/offline/dropbox-backup.ts
+            sed -i "s#DROPBOX_REDIRECT_URI_PLACEHOLDER#xyz.scooom.pkr://dropbox-auth-callback#g" pokerogue-src/src/system/offline/dropbox-backup.ts
+          fi
+
       - name: Install PokeRogue dependencies
         working-directory: pokerogue-src
         run: pnpm install
@@ -71,7 +81,7 @@ jobs:
       - name: Install Capacitor
         working-directory: pokerogue-src
         run: |
-            pnpm add @capacitor/core@8.4.1 @capacitor/cli@8.4.1 @capacitor/android@8.4.1 @capacitor/filesystem@8.1.2 @capacitor/share@8.0.1 @capacitor/status-bar@8.0.2 @capgo/capacitor-social-login@8.3.33
+            pnpm add @capacitor/core@8.4.1 @capacitor/cli@8.4.1 @capacitor/android@8.4.1 @capacitor/filesystem@8.1.2 @capacitor/share@8.0.1 @capacitor/status-bar@8.0.2 @capacitor/app@8.1.1 @capacitor/browser@8.0.4 @capgo/capacitor-social-login@8.3.33
 
       - name: Configure Capacitor
         working-directory: pokerogue-src
@@ -111,6 +121,10 @@ jobs:
       - name: Patch AndroidManifest to prevent keyboard resize
         working-directory: pokerogue-src
         run: node ${{ github.workspace }}/patches/android/node/android-manifest-keyboard-fix.js
+
+      - name: Register Dropbox OAuth URL scheme
+        working-directory: pokerogue-src
+        run: node ${{ github.workspace }}/patches/android/node/android-manifest-url-scheme.js
 
       - name: Fix Android permissions
         working-directory: pokerogue-src

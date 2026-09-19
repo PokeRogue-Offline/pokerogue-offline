@@ -6,6 +6,23 @@
  * General/Display/Audio/Gamepad/Keyboard), via NavigationManager's
  * documented extension point.
  *
+ * v7 of this patch. Changes from v6 (verified working):
+ *   - Backups are now pluggable across providers (Google Drive, Dropbox),
+ *     routed through new #system/offline/backup-manager.ts — see that file
+ *     and #system/offline/backup-provider.ts for the design. The UI/patch
+ *     surface changes are: sub-patch 2 now also copies backup-provider.ts,
+ *     backup-manager.ts, and dropbox-backup.ts (plus their tests) alongside
+ *     google-drive-backup.ts; the handler talks to backup-manager.ts instead
+ *     of google-drive-backup.ts directly; sub-patch 6 gains a new
+ *     "Backup Provider" row (activatable, cycles the active provider,
+ *     placed before "Connect Account"); "Connect Google Account" is
+ *     relabeled "Connect Account" and "Drive Last Played" is relabeled
+ *     "Last Backup Played", since both are provider-neutral now; "Backup
+ *     Save"'s displayed value is the active provider's name instead of a
+ *     hardcoded "Google Drive". patches/all/node/auto-drive-sync.js is
+ *     updated separately to import autoSyncCheckpoint from
+ *     backup-manager.ts instead of google-drive-backup.ts.
+ *
  * v6 of this patch. Changes from v5 (verified working):
  *   - NEW "Update Pop-Ups" row — a genuine two-option Setting (Off/On,
  *     default On), same zero-custom-code shape as "Include Current Run".
@@ -37,13 +54,19 @@
  *   1. src/enums/ui-mode.ts
  *        Append SETTINGS_OFFLINE (after ALERT_MODAL, the last entry).
  *
- *   2. src/system/offline/google-drive-backup.ts  (new file)
- *        Cross-platform (Capacitor / Electron) Drive backup helper.
- *        collectBackupPayload() now respects "Include Current Run";
- *        restoreFromBackup() no longer excludes session keys (it just
- *        writes back whatever a given backup actually contains); adds
- *        getRemoteLastPlayed(). listAppDataFiles() removed — nothing
- *        uses it now that the debug screen is gone.
+ *   2. src/system/offline/backup-provider.ts,
+ *      src/system/offline/backup-manager.ts,
+ *      src/system/offline/google-drive-backup.ts,
+ *      src/system/offline/dropbox-backup.ts  (new files)
+ *        backup-provider.ts defines the shared BackupProvider interface and
+ *        the pure isSafeToAutoUpload() anti-overwrite check. google-drive-
+ *        backup.ts and dropbox-backup.ts each implement it for their
+ *        respective cloud backend. backup-manager.ts is the single module
+ *        the UI (sub-patch 3) and the auto-sync patch
+ *        (patches/all/node/auto-drive-sync.js) actually call — it owns
+ *        provider selection, payload collection, and the debounce/dirty/
+ *        safety gating for auto-sync. See backup-provider.ts's doc comment
+ *        for the full anti-overwrite design.
  *
  *   3. src/ui/settings/offline-settings-ui-handler.ts  (new file)
  *        Extends BaseSettingsUiHandler (same base class as the real
@@ -60,12 +83,13 @@
  *        makes it show up as a 6th tab in the real Settings screen.
  *
  *   6. src/system/settings/settings.ts
- *        Append SettingType.APP; append 10 SettingKeys entries; append 10
- *        Setting entries (grouped: 3 locked action/toggle rows, 1 read-only
- *        info row, 1 always-on action row, then 1 always-on action row +
- *        3 always-on read-only info rows — Value, Fetched, Expires — for
- *        the daily seed cache) to the shared Setting[] array, all
- *        type: APP so they only ever show up on our tab.
+ *        Append SettingType.APP; append 11 SettingKeys entries; append 11
+ *        Setting entries (grouped: 1 always-on "Backup Provider" action row,
+ *        3 locked action/toggle rows, 1 read-only info row, 1 always-on
+ *        action row, then 1 always-on action row + 3 always-on read-only
+ *        info rows — Value, Fetched, Expires — for the daily seed cache) to
+ *        the shared Setting[] array, all type: APP so they only ever show
+ *        up on our tab.
  *
  *   7. src/ui/settings/base-settings-ui-handler.ts
  *        Widen `settingLabels`, `optionValueLabels`, `optionCursors`, and
@@ -80,8 +104,9 @@
  *
  *   8. src/ui/settings/settings-ui-handler.ts
  *        Adds a show() override to the General tab (always the entry point
- *        when Settings is opened) that fires offlineBackup.tryRestoreSession()
- *        fire-and-forget. Prewarms the connection state so that if/when the
+ *        when Settings is opened) that fires the active provider's
+ *        tryRestoreSession() (via backup-manager.ts) fire-and-forget.
+ *        Prewarms the connection state so that if/when the
  *        player tabs over to Offline, the row already reflects "Connected"
  *        instead of a "Checking connection…" flash — all handler instances
  *        exist from boot (Ui.setup() constructs and calls setup() on every
@@ -155,35 +180,34 @@ if (uiModeSrc.includes("SETTINGS_OFFLINE")) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-patch 2: src/system/offline/google-drive-backup.ts  (new file)
+// Sub-patch 2: src/system/offline/{backup-provider,backup-manager,
+//   google-drive-backup,dropbox-backup}.ts  (new files, plus paired tests)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BACKUP_MODULE_PATH = path.join("pokerogue-src", "src", "system", "offline", "google-drive-backup.ts");
+const BACKUP_MODULE_NAMES = ["backup-provider", "backup-manager", "google-drive-backup", "dropbox-backup"];
 
-if (fs.existsSync(BACKUP_MODULE_PATH)) {
-  console.log("SKIP google-drive-backup.ts — already exists");
-} else {
-  const src = fs.readFileSync(path.join(NEW_FILES_DIR, "src", "system", "offline", "google-drive-backup.ts"), "utf8");
-  writeFile(BACKUP_MODULE_PATH, src);
-}
+for (const moduleName of BACKUP_MODULE_NAMES) {
+  const modulePath = path.join("pokerogue-src", "src", "system", "offline", `${moduleName}.ts`);
+  if (fs.existsSync(modulePath)) {
+    console.log(`SKIP ${moduleName}.ts — already exists`);
+  } else {
+    const src = fs.readFileSync(path.join(NEW_FILES_DIR, "src", "system", "offline", `${moduleName}.ts`), "utf8");
+    writeFile(modulePath, src);
+  }
 
-const BACKUP_MODULE_TEST_PATH = path.join(
-  "pokerogue-src",
-  "test",
-  "tests",
-  "system",
-  "offline",
-  "google-drive-backup.test.ts",
-);
-
-if (fs.existsSync(BACKUP_MODULE_TEST_PATH)) {
-  console.log("SKIP google-drive-backup.test.ts — already exists");
-} else {
-  const testSrc = fs.readFileSync(
-    path.join(NEW_FILES_DIR, "test", "tests", "system", "offline", "google-drive-backup.test.ts"),
-    "utf8",
-  );
-  writeFile(BACKUP_MODULE_TEST_PATH, testSrc);
+  const testPath = path.join("pokerogue-src", "test", "tests", "system", "offline", `${moduleName}.test.ts`);
+  const testSrcPath = path.join(NEW_FILES_DIR, "test", "tests", "system", "offline", `${moduleName}.test.ts`);
+  if (fs.existsSync(testPath)) {
+    console.log(`SKIP ${moduleName}.test.ts — already exists`);
+  } else if (!fs.existsSync(testSrcPath)) {
+    // google-drive-backup.ts is the only one of these four with no dedicated
+    // test file — its one testable pure function (isSafeToAutoUpload) moved
+    // to backup-provider.ts, which is now shared/tested there instead.
+    console.log(`SKIP ${moduleName}.test.ts — no test file to copy`);
+  } else {
+    const testSrc = fs.readFileSync(testSrcPath, "utf8");
+    writeFile(testPath, testSrc);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,12 +294,13 @@ if (settingsSrc.includes("SettingType.APP")) {
     `export enum SettingType {\n  GENERAL,\n  DISPLAY,\n  AUDIO,\n  APP,\n}`,
   );
 
-  // 6b. SettingKeys — append 6 new keys.
+  // 6b. SettingKeys — append 11 new keys.
   const KEYS_ANCHOR = `Prefer_Baton_Pass: "PREFER_BATON_PASS",\n};`;
   requireAnchor(settingsSrc, KEYS_ANCHOR, "SettingKeys object in settings.ts");
   settingsSrc = settingsSrc.replace(
     KEYS_ANCHOR,
     `Prefer_Baton_Pass: "PREFER_BATON_PASS",
+  Offline_Backup_Provider: "OFFLINE_BACKUP_PROVIDER",
   Offline_Google_Connect: "OFFLINE_GOOGLE_CONNECT",
   Offline_Backup_Save: "OFFLINE_BACKUP_SAVE",
   Offline_Restore_Backup: "OFFLINE_RESTORE_BACKUP",
@@ -290,7 +315,7 @@ if (settingsSrc.includes("SettingType.APP")) {
 };`,
   );
 
-  // 6c. Setting[] array — append 6 new rows, locked ones grouped together.
+  // 6c. Setting[] array — append 11 new rows, locked ones grouped together.
   const SETTING_ANCHOR = `  {
     key: SettingKeys.Prefer_Baton_Pass,
     label: i18next.t("settings:preferBatonPass"),
@@ -310,8 +335,22 @@ if (settingsSrc.includes("SettingType.APP")) {
     type: SettingType.DISPLAY,
   },
   {
+    key: SettingKeys.Offline_Backup_Provider,
+    label: "Backup Provider",
+    // Text is overwritten at runtime to whichever provider is active —
+    // pressing ACTION on this row cycles to the next registered provider
+    // (see OfflineSettingsUiHandler.handleProviderCyclePress()). A
+    // single-option activatable row, same shape as every other action row
+    // below, rather than a cycling Setting — see backup-manager.ts's doc
+    // comment on why a plain cycling row can't run side-effect code here.
+    options: [{ value: "0", label: "Google Drive" }],
+    default: 0,
+    type: SettingType.APP,
+    activatable: true,
+  },
+  {
     key: SettingKeys.Offline_Google_Connect,
-    label: "Connect Google Account",
+    label: "Connect Account",
     options: [{ value: "0", label: "Not Connected" }],
     default: 0,
     type: SettingType.APP,
@@ -320,6 +359,7 @@ if (settingsSrc.includes("SettingType.APP")) {
   {
     key: SettingKeys.Offline_Backup_Save,
     label: "Backup Save",
+    // Text is overwritten at runtime to the active provider's display name.
     options: [{ value: "0", label: "Google Drive" }],
     default: 0,
     type: SettingType.APP,
@@ -345,7 +385,7 @@ if (settingsSrc.includes("SettingType.APP")) {
   },
   {
     key: SettingKeys.Offline_Drive_Last_Played,
-    label: "Drive Last Played",
+    label: "Last Backup Played",
     options: [{ value: "0", label: "—" }],
     default: 0,
     type: SettingType.APP,
@@ -449,7 +489,7 @@ if (generalTabSrc.includes("app-settings-menu: prewarm")) {
   requireAnchor(generalTabSrc, IMPORT_ANCHOR, "SettingType import in settings-ui-handler.ts");
   generalTabSrc = generalTabSrc.replace(
     IMPORT_ANCHOR,
-    `${IMPORT_ANCHOR}\nimport * as offlineBackup from "#system/offline/google-drive-backup";`,
+    `${IMPORT_ANCHOR}\nimport * as backupManager from "#system/offline/backup-manager";`,
   );
 
   const CLASS_END_ANCHOR = `    this.title = "General";\n    this.localStorageKey = "settings";\n  }\n}`;
@@ -458,15 +498,16 @@ if (generalTabSrc.includes("app-settings-menu: prewarm")) {
     `    this.title = "General";\n` +
     `    this.localStorageKey = "settings";\n` +
     `  }\n\n` +
-    `  // app-settings-menu: prewarm the Google Drive connection state whenever\n` +
-    `  // the Settings screen is opened (General is always the entry tab), so\n` +
-    `  // the Offline tab's row already reflects the resolved state instead of\n` +
-    `  // a "Checking…" flash if/when the player tabs over to it. No-op if\n` +
-    `  // already signed in this session.\n` +
+    `  // app-settings-menu: prewarm the active backup provider's connection\n` +
+    `  // state whenever the Settings screen is opened (General is always the\n` +
+    `  // entry tab), so the Offline tab's row already reflects the resolved\n` +
+    `  // state instead of a "Checking…" flash if/when the player tabs over to\n` +
+    `  // it. No-op if already signed in this session.\n` +
     `  override show(args: any[]): boolean {\n` +
     `    const result = super.show(args);\n` +
-    `    if (!offlineBackup.isSignedIn()) {\n` +
-    `      offlineBackup.tryRestoreSession().catch(err => {\n` +
+    `    const provider = backupManager.getActiveProvider();\n` +
+    `    if (!provider.isAuthenticated()) {\n` +
+    `      provider.tryRestoreSession().catch(err => {\n` +
     `        console.warn("Silent session restore failed:", err);\n` +
     `      });\n` +
     `    }\n` +

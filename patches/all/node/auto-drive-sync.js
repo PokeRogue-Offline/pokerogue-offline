@@ -2,25 +2,26 @@
 /**
  * Patch: auto-drive-sync.js
  *
- * Adds an automatic Google Drive upload attempt every 5 waves, matching the
+ * Adds an automatic backup upload attempt every 5 waves, matching the
  * online game's own server-checkpoint cadence (`waveIndex % 5 === 1` — see
  * the "Game syncs to server on waves X1 and X6" comment this patch anchors
- * on). Calls the new #system/offline/google-drive-backup.ts export
- * autoSyncCheckpoint(), which is itself gated by a dirty flag, a debounce
- * interval, and an anti-overwrite safety check against Drive's own revision
+ * on). Calls #system/offline/backup-manager.ts's autoSyncCheckpoint(), which
+ * routes to whichever backup provider (Google Drive, Dropbox, ...) is
+ * currently active and is itself gated by a dirty flag, a debounce interval,
+ * and an anti-overwrite safety check against that provider's own revision
  * fingerprint — see that module's doc-comment for the full design. This
  * patch's own job is intentionally tiny: fire the checkpoint at the right
  * moment, fire-and-forget, and nothing else.
  *
  * Only fires on a successful local save (inside the existing `if (!success)`
  * early-return's else-branch) — a failed local save must never trigger a
- * Drive attempt. Deliberately does NOT also key off the online game's
+ * backup attempt. Deliberately does NOT also key off the online game's
  * `lastSavePlayTime >= 300` long-wave fallback (that governs its own
  * server-sync cadence, not ours) — auto-sync here uses a fixed 5-wave
  * cadence with its own independent debounce, per the anti-overwrite design.
  *
  * Depends on app-settings-menu.js having already run (needs
- * google-drive-backup.ts already copied into pokerogue-src, since this patch
+ * backup-manager.ts already copied into pokerogue-src, since this patch
  * imports from it). Must be applied after app-settings-menu.js.
  *
  * Targets: pokerogue-src/src/phases/encounter-phase.ts
@@ -67,7 +68,7 @@ const IMPORT_ANCHOR = `import { achvs } from "#system/achv";\n`;
 requireAnchor(src, IMPORT_ANCHOR, '\'import { achvs } from "#system/achv";\' in encounter-phase.ts');
 src = src.replace(
   IMPORT_ANCHOR,
-  `${IMPORT_ANCHOR}import { autoSyncCheckpoint } from "#system/offline/google-drive-backup";\n`,
+  `${IMPORT_ANCHOR}import { autoSyncCheckpoint } from "#system/offline/backup-manager";\n`,
 );
 
 // ── Sub-patch 2: fire the checkpoint right after a successful checkpoint-wave local save ──
