@@ -195,6 +195,61 @@ describe("System - Offline - backup-manager", () => {
     });
   });
 
+  describe("disconnectActiveProvider()", () => {
+    it("signs out the active provider and clears its fingerprint", async () => {
+      await backupManager.backupSave(); // establishes providerA's fingerprint
+      expect(localStorage.getItem("pkrOfflineSync_provider-a_fingerprint")).toBeTruthy();
+
+      await backupManager.disconnectActiveProvider();
+
+      expect(providerA.authenticated).toBe(false);
+      expect(localStorage.getItem("pkrOfflineSync_provider-a_fingerprint")).toBeFalsy();
+    });
+
+    it("leaves other providers untouched", async () => {
+      backupManager.switchProvider("provider-b");
+      await backupManager.backupSave(); // establishes providerB's fingerprint
+
+      await backupManager.disconnectActiveProvider();
+
+      expect(providerA.authenticated).toBe(true);
+      expect(localStorage.getItem("pkrOfflineSync_provider-a_fingerprint")).toBeFalsy();
+    });
+  });
+
+  describe("authenticateActiveProvider()", () => {
+    it("authenticates the active provider", async () => {
+      providerA.authenticated = false;
+
+      await backupManager.authenticateActiveProvider();
+
+      expect(providerA.authenticated).toBe(true);
+    });
+
+    it("signs out and clears the fingerprint of every other registered provider on success", async () => {
+      backupManager.switchProvider("provider-b");
+      await backupManager.backupSave(); // establishes providerA's fingerprint from an earlier session
+      localStorage.setItem("pkrOfflineSync_provider-a_fingerprint", JSON.stringify({ headRevisionId: "stale" }));
+      providerA.authenticated = true;
+
+      await backupManager.authenticateActiveProvider();
+
+      expect(providerA.authenticated).toBe(false);
+      expect(localStorage.getItem("pkrOfflineSync_provider-a_fingerprint")).toBeFalsy();
+    });
+
+    it("does not touch other providers if authenticate() itself throws", async () => {
+      backupManager.switchProvider("provider-b");
+      providerB.authenticate = async () => {
+        throw new Error("auth failed");
+      };
+
+      await expect(backupManager.authenticateActiveProvider()).rejects.toThrow("auth failed");
+
+      expect(providerA.authenticated).toBe(true);
+    });
+  });
+
   describe("per-provider fingerprint storage", () => {
     it("keeps Google Drive's fingerprint key unsuffixed for zero-migration compatibility", async () => {
       backupManager.__setProvidersForTest([

@@ -82,6 +82,35 @@ function getFingerprintKey(providerId: string): string {
   return providerId === DEFAULT_PROVIDER_ID ? "pkrOfflineSync_fingerprint" : `pkrOfflineSync_${providerId}_fingerprint`;
 }
 
+/** Forgets a single provider's stored credentials and remembered fingerprint. */
+async function forgetProvider(provider: BackupProvider): Promise<void> {
+  await provider.signOut();
+  localStorage.removeItem(getFingerprintKey(provider.id));
+}
+
+/**
+ * Explicit "Disconnect Account" action: forgets the active provider's stored
+ * credentials and remembered fingerprint, so a later reconnect always goes
+ * through a full interactive sign-in (e.g. to pick up permission changes on
+ * the OAuth app, rather than silently reusing a stale cached token).
+ */
+export async function disconnectActiveProvider(): Promise<void> {
+  await forgetProvider(getActiveProvider());
+}
+
+/**
+ * Runs the active provider's interactive sign-in flow, and on success forgets
+ * every *other* registered provider's stored credentials/fingerprint — so
+ * successfully connecting a new provider always leaves exactly one provider
+ * authenticated, never a stale leftover connection to whichever provider was
+ * used previously.
+ */
+export async function authenticateActiveProvider(): Promise<void> {
+  const active = getActiveProvider();
+  await active.authenticate();
+  await Promise.all(providers.filter(p => p.id !== active.id).map(p => forgetProvider(p)));
+}
+
 function getFingerprint(providerId: string): RememberedFingerprint | null {
   try {
     const raw = localStorage.getItem(getFingerprintKey(providerId));

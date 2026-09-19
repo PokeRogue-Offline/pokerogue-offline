@@ -13,11 +13,15 @@ import * as backupManager from "#system/offline/backup-manager";
  * documented extension point (append to `modes`/`labels`).
  *
  * Rows, in display order (locked ones grouped together):
- *   - Backup Provider (always interactive — cycles Google Drive/Dropbox/...)
+ *   - Backup Provider (always interactive — opens a scrollable picker over
+ *     Google Drive/Dropbox/...; authenticating a provider here forgets every
+ *     other provider's stored credentials/fingerprint, see
+ *     backup-manager.ts's authenticateActiveProvider())
  *   - Connect Account (always interactive)
- *   - Backup Save                    \
- *   - Restore Backup                  } locked until connected
- *   - Include Current Run (Off/On)   /
+ *   - Disconnect Account              \
+ *   - Backup Save                      } locked until connected
+ *   - Restore Backup                   |
+ *   - Include Current Run (Off/On)    /
  *   - Last Backup Played (read-only, populates once connected — not
  *     itself "locked", just shows a placeholder until there's something
  *     to show)
@@ -59,6 +63,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     SettingKeys.Offline_Backup_Save,
     SettingKeys.Offline_Restore_Backup,
     SettingKeys.Offline_Include_Current_Run,
+    SettingKeys.Offline_Disconnect,
   ];
 
   /**
@@ -272,7 +277,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
               () => {
                 ui.revertMode();
                 this.showText("", 0);
-                this.performRestore();
+                this.performRestore(true);
               },
               () => {
                 ui.revertMode();
@@ -368,10 +373,13 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   protected override activateSetting(setting: Setting): boolean {
     switch (setting.key) {
       case SettingKeys.Offline_Backup_Provider:
-        this.handleProviderCyclePress();
+        this.handleProviderSelectPress();
         return true;
       case SettingKeys.Offline_Google_Connect:
         this.handleConnectPress();
+        return true;
+      case SettingKeys.Offline_Disconnect:
+        this.handleDisconnectPress();
         return true;
       case SettingKeys.Offline_Backup_Save:
         this.handleBackupPress();
@@ -390,30 +398,80 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   }
 
   /**
-   * Cycles to the next registered provider (see backup-manager.ts's
-   * getProviders() — adding a third provider later needs nothing else here,
-   * this just walks the list). Never triggers a network call by itself
-   * (switchProvider() is a pure local preference change); if the
-   * newly-active provider isn't authenticated yet, immediately starts its
-   * auth flow, same as pressing Connect directly — "selecting an
-   * unauthenticated provider starts its auth flow."
+   * Opens a scrollable provider picker — the same `UiMode.OPTION_SELECT`
+   * overlay Display's "Language" row uses — instead of blindly cycling
+   * through `backupManager.getProviders()`. Adding a third provider later
+   * needs nothing else here, since the option list is built from the
+   * registry each time the row is pressed. Selecting an unauthenticated
+   * provider immediately starts its auth flow, same as pressing Connect
+   * directly.
    */
-  private handleProviderCyclePress(): void {
+  private handleProviderSelectPress(): void {
     if (this.connectInProgress) {
       return;
     }
 
+    const ui = this.getUi();
     const providers = backupManager.getProviders();
-    const currentIndex = providers.findIndex(p => p.id === backupManager.getActiveProviderId());
-    const next = providers[(currentIndex + 1) % providers.length];
+    const options = providers.map(provider => ({
+      label: provider.displayName,
+      handler: () => {
+        backupManager.switchProvider(provider.id);
+        ui.revertMode();
+        this.refreshDisplay();
+        this.refreshLastBackupPlayed();
+        if (!provider.isAuthenticated()) {
+          this.handleConnectPress();
+        }
+        return true;
+      },
+    }));
+    options.push({
+      label: "Back",
+      handler: () => {
+        ui.revertMode();
+        return true;
+      },
+    });
 
-    backupManager.switchProvider(next.id);
-    this.refreshDisplay();
-    this.refreshLastBackupPlayed();
+    ui.setOverlayMode(UiMode.OPTION_SELECT, { options, maxOptions: options.length });
+  }
 
-    if (!next.isAuthenticated()) {
-      this.handleConnectPress();
+  private handleDisconnectPress(): void {
+    if (!this.requireSignedIn()) {
+      return;
     }
+    const providerName = backupManager.getActiveProvider().displayName;
+    const ui = this.getUi();
+    ui.showText(
+      `Disconnect from ${providerName}? You'll need to sign in again to sync.`,
+      null,
+      () => {
+        ui.setOverlayMode(
+          UiMode.CONFIRM,
+          () => {
+            ui.revertMode();
+            this.showText("", 0);
+            backupManager
+              .disconnectActiveProvider()
+              .then(() => {
+                this.refreshDisplay();
+                this.refreshLastBackupPlayed();
+              })
+              .catch(err => {
+                console.error("Disconnect failed:", err);
+                this.showText("Disconnect failed. Check the console for details.", 0, () => this.showText("", 0), 1500);
+              });
+          },
+          () => {
+            ui.revertMode();
+            this.showText("", 0);
+          },
+          false,
+          0,
+        );
+      },
+    );
   }
 
   private handleConnectPress(): void {
@@ -427,8 +485,8 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     // sign-in prompt before the UI's had a chance to settle.
     const unlockAt = Date.now() + 1000;
     this.setRowText(SettingKeys.Offline_Google_Connect, "Connecting…");
-    provider
-      .authenticate()
+    backupManager
+      .authenticateActiveProvider()
       .then(() => {
         this.refreshDisplay();
         this.refreshLastBackupPlayed();
@@ -508,11 +566,21 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     );
   }
 
-  private performRestore(): void {
+  /**
+   * @param reloadOnSuccess - When true (the auto-restore prompt's confirm
+   * path), reload the page immediately on success instead of requiring a
+   * second manual press on "Restore Backup" — the prompt already got an
+   * explicit "yes" from the player, so there's nothing left to confirm.
+   */
+  private performRestore(reloadOnSuccess = false): void {
     this.setRowText(SettingKeys.Offline_Restore_Backup, "Restoring…");
     backupManager
       .restoreFromBackup()
       .then(() => {
+        if (reloadOnSuccess) {
+          window.location.reload();
+          return;
+        }
         this.restoreComplete = true;
         this.setRowText(SettingKeys.Offline_Restore_Backup, "Press Confirm to reload");
       })

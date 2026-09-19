@@ -83,9 +83,10 @@
  *        makes it show up as a 6th tab in the real Settings screen.
  *
  *   6. src/system/settings/settings.ts
- *        Append SettingType.APP; append 11 SettingKeys entries; append 11
- *        Setting entries (grouped: 1 always-on "Backup Provider" action row,
- *        3 locked action/toggle rows, 1 read-only info row, 1 always-on
+ *        Append SettingType.APP; append 12 SettingKeys entries; append 12
+ *        Setting entries (grouped: 2 always-on "Backup Provider"/"Connect
+ *        Account" action rows, 1 locked "Disconnect Account" action row,
+ *        3 more locked action/toggle rows, 1 read-only info row, 1 always-on
  *        action row, then 1 always-on action row + 3 always-on read-only
  *        info rows — Value, Fetched, Expires — for the daily seed cache) to
  *        the shared Setting[] array, all type: APP so they only ever show
@@ -294,7 +295,7 @@ if (settingsSrc.includes("SettingType.APP")) {
     `export enum SettingType {\n  GENERAL,\n  DISPLAY,\n  AUDIO,\n  APP,\n}`,
   );
 
-  // 6b. SettingKeys — append 11 new keys.
+  // 6b. SettingKeys — append 12 new keys.
   const KEYS_ANCHOR = `Prefer_Baton_Pass: "PREFER_BATON_PASS",\n};`;
   requireAnchor(settingsSrc, KEYS_ANCHOR, "SettingKeys object in settings.ts");
   settingsSrc = settingsSrc.replace(
@@ -302,6 +303,7 @@ if (settingsSrc.includes("SettingType.APP")) {
     `Prefer_Baton_Pass: "PREFER_BATON_PASS",
   Offline_Backup_Provider: "OFFLINE_BACKUP_PROVIDER",
   Offline_Google_Connect: "OFFLINE_GOOGLE_CONNECT",
+  Offline_Disconnect: "OFFLINE_DISCONNECT",
   Offline_Backup_Save: "OFFLINE_BACKUP_SAVE",
   Offline_Restore_Backup: "OFFLINE_RESTORE_BACKUP",
   Offline_Include_Current_Run: "OFFLINE_INCLUDE_CURRENT_RUN",
@@ -317,7 +319,7 @@ if (settingsSrc.includes("SettingType.APP")) {
 };`,
   );
 
-  // 6c. Setting[] array — append 11 new rows, locked ones grouped together.
+  // 6c. Setting[] array — append 12 new rows, locked ones grouped together.
   const SETTING_ANCHOR = `  {
     key: SettingKeys.Prefer_Baton_Pass,
     label: i18next.t("settings:preferBatonPass"),
@@ -340,8 +342,9 @@ if (settingsSrc.includes("SettingType.APP")) {
     key: SettingKeys.Offline_Backup_Provider,
     label: "Backup Provider",
     // Text is overwritten at runtime to whichever provider is active —
-    // pressing ACTION on this row cycles to the next registered provider
-    // (see OfflineSettingsUiHandler.handleProviderCyclePress()). A
+    // pressing ACTION on this row opens a scrollable provider picker (see
+    // OfflineSettingsUiHandler.handleProviderSelectPress()), the same
+    // UiMode.OPTION_SELECT overlay Display's "Language" row uses. A
     // single-option activatable row, same shape as every other action row
     // below, rather than a cycling Setting — see backup-manager.ts's doc
     // comment on why a plain cycling row can't run side-effect code here.
@@ -354,6 +357,14 @@ if (settingsSrc.includes("SettingType.APP")) {
     key: SettingKeys.Offline_Google_Connect,
     label: "Connect Account",
     options: [{ value: "0", label: "Not Connected" }],
+    default: 0,
+    type: SettingType.APP,
+    activatable: true,
+  },
+  {
+    key: SettingKeys.Offline_Disconnect,
+    label: "Disconnect Account",
+    options: [{ value: "0", label: "Disconnect" }],
     default: 0,
     type: SettingType.APP,
     activatable: true,
