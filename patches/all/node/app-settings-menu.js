@@ -312,6 +312,8 @@ if (settingsSrc.includes("SettingType.APP")) {
   Offline_Daily_Seed_Fetched: "OFFLINE_DAILY_SEED_FETCHED",
   Offline_Daily_Seed_Expires: "OFFLINE_DAILY_SEED_EXPIRES",
   Offline_Update_Pop_Ups: "OFFLINE_UPDATE_POP_UPS",
+  Offline_Damage_Range: "OFFLINE_DAMAGE_RANGE",
+  Offline_Enemy_Hp_Percent: "OFFLINE_ENEMY_HP_PERCENT",
 };`,
   );
 
@@ -435,6 +437,32 @@ if (settingsSrc.includes("SettingType.APP")) {
       { value: "1", label: "On" },
     ],
     default: 1,
+    type: SettingType.APP,
+  },
+  {
+    // Fight-menu damage-range/KO-label preview (patches/all/node/damage-preview.js).
+    // Off by default - shows a range like "21%-38%" or a "Guaranteed 1HKO"/
+    // "Guaranteed 2HKO"/"Breaks Shield" label next to each enemy's info box.
+    key: SettingKeys.Offline_Damage_Range,
+    label: "Damage Range",
+    options: [
+      { value: "0", label: "Off" },
+      { value: "1", label: "On" },
+    ],
+    default: 0,
+    type: SettingType.APP,
+  },
+  {
+    // Enemy HP% preview (patches/all/node/damage-preview.js). Off by
+    // default - shows the enemy's current HP as a percentage of its total
+    // max HP (boss shield segments included) next to the HP bar.
+    key: SettingKeys.Offline_Enemy_Hp_Percent,
+    label: "Enemy HP %",
+    options: [
+      { value: "0", label: "Off" },
+      { value: "1", label: "On" },
+    ],
+    default: 0,
     type: SettingType.APP,
   },
 ];`,
