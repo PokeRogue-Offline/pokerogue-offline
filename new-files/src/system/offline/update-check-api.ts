@@ -135,8 +135,18 @@ function extractChangelog(body: string | null | undefined): string {
  * ascending, up to and including the latest release. When a version was
  * released more than once (e.g. a same-version rebuild/hotfix), only the
  * highest build number's changelog is kept for that version's page.
+ *
+ * Most of this fork's own releases don't bump the upstream app version at
+ * all (it's upstream pagefaultgames/pokerogue's package.json version, not
+ * something this fork controls) - only the CI build number embedded in the
+ * tag changes. So a release matching `installedVersion` is still reported
+ * as an update when its build number is strictly higher than
+ * `installedBuildNumber`.
  */
-export async function checkForUpdates(installedVersion: string): Promise<ReleaseInfo[]> {
+export async function checkForUpdates(
+  installedVersion: string,
+  installedBuildNumber: number,
+): Promise<ReleaseInfo[]> {
   const releases = await fetchAllReleases();
 
   const byVersion = new Map<string, ReleaseInfo>();
@@ -160,6 +170,9 @@ export async function checkForUpdates(installedVersion: string): Promise<Release
   }
 
   return Array.from(byVersion.values())
-    .filter(r => compareVersions(r.version, installedVersion) === 1)
+    .filter(r => {
+      const cmp = compareVersions(r.version, installedVersion);
+      return cmp === 1 || (cmp === 0 && r.buildNumber > installedBuildNumber);
+    })
     .sort((a, b) => compareVersions(a.version, b.version));
 }

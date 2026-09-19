@@ -13,6 +13,16 @@ on:
         required: false
         type: string
         default: 'main'
+      # TEMPORARY - remove this input and the -f version_override line below
+      # (in "Trigger iOS build") after this one release ships. Only iOS's
+      # version.txt feeds the combined release's tag/name (see the "Read
+      # version" step below), so overriding it there alone is enough to make
+      # every platform's update-checker see this release as strictly newer,
+      # without touching any platform's real, upstream-mirrored app version.
+      version_override:
+        description: 'TEMPORARY: fake app version for this release only (e.g. 1.12.0.25), used solely to force the update-checker to fire on a build-number-only release. Leave blank for normal behavior.'
+        required: false
+        type: string
 
 permissions:
   actions: write   # needed to trigger and query other workflow runs
@@ -46,7 +56,8 @@ jobs:
           gh workflow run build-ios.yml --ref "${{ github.ref_name }}" \
             -f build_number=${{ steps.build.outputs.number }} \
             -f dev=${{ inputs.dev }} \
-            -f branch=${{ inputs.branch || 'main' }}
+            -f branch=${{ inputs.branch || 'main' }} \
+            -f version_override=${{ inputs.version_override }}
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
       - name: Trigger Android build

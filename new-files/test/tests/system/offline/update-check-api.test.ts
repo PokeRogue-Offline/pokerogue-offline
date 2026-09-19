@@ -30,7 +30,7 @@ describe("System - Offline - update-check-api", () => {
         { tag_name: "v1.12.0.5-204", body: "" },
       ]);
 
-      const result = await checkForUpdates("1.0.0.0");
+      const result = await checkForUpdates("1.0.0.0", 0);
 
       expect(result.map(r => r.version)).toEqual(["1.11.22", "1.12.0.5"]);
     });
@@ -42,7 +42,7 @@ describe("System - Offline - update-check-api", () => {
         { tag_name: "v1.12.0.5-205", body: "<!-- changelog:start -->build 205<!-- changelog:end -->" },
       ]);
 
-      const result = await checkForUpdates("1.0.0.0");
+      const result = await checkForUpdates("1.0.0.0", 0);
 
       expect(result).toHaveLength(1);
       expect(result[0].buildNumber).toBe(210);
@@ -57,7 +57,7 @@ describe("System - Offline - update-check-api", () => {
         { tag_name: "v1.12.0.5-204", body: "" },
       ]);
 
-      const result = await checkForUpdates("1.12.0.4");
+      const result = await checkForUpdates("1.12.0.4", 0);
 
       expect(result.map(r => r.version)).toEqual(["1.12.0.5", "1.12.0.6", "1.12.0.9"]);
     });
@@ -69,7 +69,7 @@ describe("System - Offline - update-check-api", () => {
         { tag_name: "v1.12.0.6-211", body: "" },
       ]);
 
-      const result = await checkForUpdates("1.0.0.0");
+      const result = await checkForUpdates("1.0.0.0", 0);
 
       expect(result.map(r => r.version)).toEqual(["1.12.0.6"]);
     });
@@ -82,7 +82,7 @@ describe("System - Offline - update-check-api", () => {
         },
       ]);
 
-      const result = await checkForUpdates("1.0.0.0");
+      const result = await checkForUpdates("1.0.0.0", 0);
 
       expect(result[0].changelog).toBe("Fixed a bug.");
     });
@@ -99,7 +99,7 @@ describe("System - Offline - update-check-api", () => {
         },
       ]);
 
-      const result = await checkForUpdates("1.0.0.0");
+      const result = await checkForUpdates("1.0.0.0", 0);
 
       expect(result[0].changelog).toBe("## PokeRogueOffline v1.12.0.5");
     });
@@ -107,7 +107,7 @@ describe("System - Offline - update-check-api", () => {
     it("falls back to a literal message when the body is empty entirely", async () => {
       mockReleases([{ tag_name: "v1.12.0.5-204", body: "" }]);
 
-      const result = await checkForUpdates("1.0.0.0");
+      const result = await checkForUpdates("1.0.0.0", 0);
 
       expect(result[0].changelog).toBe("No changelog available for this version.");
     });
@@ -115,9 +115,28 @@ describe("System - Offline - update-check-api", () => {
     it("returns an empty array when nothing is newer than the installed version", async () => {
       mockReleases([{ tag_name: "v1.12.0.5-204", body: "" }]);
 
-      const result = await checkForUpdates("1.12.0.5");
+      const result = await checkForUpdates("1.12.0.5", 204);
 
       expect(result).toEqual([]);
+    });
+
+    it("reports an update when only the build number changed for the installed version", async () => {
+      mockReleases([{ tag_name: "v1.12.0.5-210", body: "" }]);
+
+      const result = await checkForUpdates("1.12.0.5", 204);
+
+      expect(result.map(r => r.version)).toEqual(["1.12.0.5"]);
+      expect(result[0].buildNumber).toBe(210);
+    });
+
+    it("does not report an update for a same-or-older build of the installed version", async () => {
+      mockReleases([{ tag_name: "v1.12.0.5-204", body: "" }]);
+
+      const sameBuild = await checkForUpdates("1.12.0.5", 204);
+      const olderBuild = await checkForUpdates("1.12.0.5", 210);
+
+      expect(sameBuild).toEqual([]);
+      expect(olderBuild).toEqual([]);
     });
   });
 });

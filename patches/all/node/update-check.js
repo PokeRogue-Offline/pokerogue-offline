@@ -16,9 +16,11 @@
  * OFFLINE_BUILD_NUMBER reuses the BUILD_NUMBER_PLACEHOLDER token - the
  * existing CI `sed` substitution (global, /g) already replaces every
  * occurrence of this token in the file, so no workflow changes are needed.
- * It's only used here to skip the check on dev/local builds
- * (OFFLINE_BUILD_NUMBER.includes("DEV")) - the actual "is there an update"
- * decision is version-based, not build-number-based (see update-check-api.ts).
+ * It's used to skip the check on dev/local builds
+ * (OFFLINE_BUILD_NUMBER.includes("DEV")) and, once past that guard, as the
+ * installed build number handed to checkForUpdates() - most of this fork's
+ * own releases don't bump the (upstream-owned) app version at all, so the
+ * build number is what actually distinguishes them (see update-check-api.ts).
  *
  * Also adds a small "Update Available!" hint label under the version text.
  * This ALWAYS shows whenever an update is found, regardless of any setting,
@@ -126,8 +128,9 @@ const CONSTANTS_BLOCK =
   `\n` +
   `// update-check: reuses the same build-number token offline-banner.js's\n` +
   `// placeholder substitutes, so CI's existing global sed replace covers this too.\n` +
-  `// Only used to skip dev/local builds entirely - the update decision itself is\n` +
-  `// version-based (see #system/offline/update-check-api.ts), not build-number-based.\n` +
+  `// Used both to skip dev/local builds entirely and as the installed build\n` +
+  `// number passed to checkForUpdates() (see #system/offline/update-check-api.ts),\n` +
+  `// which is compared when a release's app version matches ours exactly.\n` +
   `const OFFLINE_BUILD_NUMBER = "BUILD_NUMBER_PLACEHOLDER";\n` +
   `let hasCheckedForUpdate = false;\n` +
   `\n` +
@@ -157,7 +160,7 @@ const CONSTANTS_BLOCK =
   `  }\n` +
   `\n` +
   `  try {\n` +
-  `    const releases = await checkForUpdates(version);\n` +
+  `    const releases = await checkForUpdates(version, Number.parseInt(OFFLINE_BUILD_NUMBER, 10));\n` +
   `    if (releases.length === 0) {\n` +
   `      return;\n` +
   `    }\n` +
