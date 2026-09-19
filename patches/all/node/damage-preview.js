@@ -23,7 +23,9 @@
  *
  *   2. src/ui/handlers/fight-ui-handler.ts
  *        New imports; in setMoveInfo()'s existing per-opponent forEach,
- *        additionally compute and forward the damage-range text.
+ *        additionally compute and forward the damage-range text. Also
+ *        clears the damage-range hint in clearMoves(), mirroring the
+ *        pre-existing updateEffectiveness() clear.
  *
  *   3. src/ui/battle-info/enemy-battle-info.ts
  *        New imports; new fields + construction for the damage-range
@@ -34,6 +36,13 @@
  *        updateBossSegments() (both already fire on exactly the events that
  *        change HP/segment state).
  *
+ *   4. src/field/pokemon.ts
+ *        New updateDamageRange() forwarding method on EnemyPokemon,
+ *        mirroring the pre-existing updateEffectiveness() forwarding method
+ *        it sits next to (both simply delegate to this.battleInfo).
+ *        Required because fight-ui-handler.ts calls updateDamageRange() on
+ *        the EnemyPokemon instance itself, not on its battleInfo.
+ *
  * Depends on app-settings-menu.js having already run (this patch's settings
  * additions live in that file's sub-patch 6, sharing its single anchor into
  * settings.ts's Setting[] array - adding a second patch touching the same
@@ -42,6 +51,7 @@
  *
  * Targets: pokerogue-src/src/ui/handlers/fight-ui-handler.ts
  *          pokerogue-src/src/ui/battle-info/enemy-battle-info.ts
+ *          pokerogue-src/src/field/pokemon.ts
  *          pokerogue-src/src/ui/damage-preview.ts (new file)
  *          pokerogue-src/src/system/offline/damage-preview-settings.ts (new file)
  *          pokerogue-src/test/tests/ui/damage-preview.test.ts (new file)
@@ -130,6 +140,32 @@ if (fightUiSrc.includes("updateDamageRange")) {
       `        isDamageRangeEnabled() ? computeDamageRangeText(pokemon, enemy, pokemonMove.getMove()) : undefined,\n` +
       `      );\n` +
       `    });`,
+  );
+
+  const CLEAR_MOVES_ANCHOR =
+    `  clearMoves() {\n` +
+    `    this.movesContainer.removeAll(true);\n` +
+    `\n` +
+    `    const opponents = (globalScene.phaseManager.getCurrentPhase() as CommandPhase).getPokemon().getOpponents();\n` +
+    `    opponents.forEach(opponent => {\n` +
+    `      (opponent as EnemyPokemon).updateEffectiveness();\n` +
+    `    });\n` +
+    `  }`;
+  requireAnchor(fightUiSrc, CLEAR_MOVES_ANCHOR, "clearMoves() per-opponent effectiveness-clear forEach in fight-ui-handler.ts");
+  fightUiSrc = fightUiSrc.replace(
+    CLEAR_MOVES_ANCHOR,
+    `  clearMoves() {\n` +
+      `    this.movesContainer.removeAll(true);\n` +
+      `\n` +
+      `    const opponents = (globalScene.phaseManager.getCurrentPhase() as CommandPhase).getPokemon().getOpponents();\n` +
+      `    opponents.forEach(opponent => {\n` +
+      `      const enemy = opponent as EnemyPokemon;\n` +
+      `      enemy.updateEffectiveness();\n` +
+      `      // Offline: also clear the damage-range hint so it doesn't stay stuck\n` +
+      `      // showing stale text after backing out of the Fight menu.\n` +
+      `      enemy.updateDamageRange();\n` +
+      `    });\n` +
+      `  }`,
   );
 
   writeFile(FIGHT_UI_PATH, fightUiSrc);
@@ -308,6 +344,46 @@ if (enemyInfoSrc.includes("updateDamageRange")) {
   );
 
   writeFile(ENEMY_INFO_PATH, enemyInfoSrc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-patch 4: src/field/pokemon.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+const POKEMON_PATH = path.join("pokerogue-src", "src", "field", "pokemon.ts");
+let pokemonSrc = readFile(POKEMON_PATH);
+
+if (pokemonSrc.includes("updateDamageRange")) {
+  console.log("SKIP pokemon.ts — damage preview forwarding method already present");
+} else {
+  // EnemyPokemon.updateDamageRange() forwards to battleInfo, mirroring the
+  // existing updateEffectiveness() forwarding method it sits next to. Without
+  // this, fight-ui-handler.ts's `enemy.updateDamageRange(...)` call (enemy is
+  // the EnemyPokemon field object, not its battleInfo) throws
+  // "updateDamageRange is not a function" at runtime.
+  const UPDATE_EFFECTIVENESS_FWD_ANCHOR =
+    `  /**\n` +
+    `   * Show or hide the type effectiveness multiplier window\n` +
+    `   * Passing undefined will hide the window\n` +
+    `   */\n` +
+    `  public updateEffectiveness(effectiveness?: string) {\n` +
+    `    this.battleInfo.updateEffectiveness(effectiveness);\n` +
+    `  }`;
+  requireAnchor(pokemonSrc, UPDATE_EFFECTIVENESS_FWD_ANCHOR, "updateEffectiveness() forwarding method in pokemon.ts");
+  pokemonSrc = pokemonSrc.replace(
+    UPDATE_EFFECTIVENESS_FWD_ANCHOR,
+    `${UPDATE_EFFECTIVENESS_FWD_ANCHOR}\n` +
+      `\n` +
+      `  /**\n` +
+      `   * Offline: show or hide the damage-range/KO-label preview window.\n` +
+      `   * Passing undefined will hide the window.\n` +
+      `   */\n` +
+      `  public updateDamageRange(text?: string) {\n` +
+      `    this.battleInfo.updateDamageRange(text);\n` +
+      `  }`,
+  );
+
+  writeFile(POKEMON_PATH, pokemonSrc);
 }
 
 console.log("Damage preview applied successfully.");
