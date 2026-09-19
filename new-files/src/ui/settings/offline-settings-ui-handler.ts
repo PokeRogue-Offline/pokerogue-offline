@@ -95,19 +95,6 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   /** True while a Force Daily Seed fetch is in flight — prevents a double-tap. */
   private forceSeedInProgress = false;
 
-  /**
-   * True once we've offered the "a backup was found, restore it?" prompt
-   * this session — static so it survives navigating away from and back to
-   * the Offline tab (a fresh instance is constructed per UiMode switch in
-   * some flows), but is NOT persisted across app relaunches, matching
-   * "invisible in normal operation" for a device that's already caught up.
-   * Set at the very start of the check (before any await), not after it
-   * resolves, so the two trigger paths below (explicit Connect press, and
-   * the silent tryRestoreSession() on tab open) can't both slip past a
-   * stale guard if they resolve close together.
-   */
-  private static hasOfferedRestorePrompt = false;
-
   constructor(mode: UiMode | null = null) {
     super(SettingType.APP, mode);
     this.title = "Offline";
@@ -252,12 +239,22 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
    *
    * No-ops (no dialog at all) if no backup exists — a first-time user
    * connecting for the first time should see nothing.
+   *
+   * "Already offered" is tracked persistently by backup-manager (see
+   * `hasOfferedRestorePrompt`/`markRestorePromptOffered`), not as in-memory
+   * state on this handler — the "yes" path below reloads the page, which
+   * would otherwise wipe an in-memory guard and let the very next silent
+   * `tryRestoreSession()` reconnect ask again. It's only cleared on a
+   * genuinely new connection or an explicit disconnect, set at the very
+   * start of the check (before any await) so the two trigger paths below
+   * (explicit Connect press, and the silent tryRestoreSession() on tab open)
+   * can't both slip past a stale guard if they resolve close together.
    */
   private offerRestorePromptIfNeeded(): void {
-    if (OfflineSettingsUiHandler.hasOfferedRestorePrompt) {
+    if (backupManager.hasOfferedRestorePrompt()) {
       return;
     }
-    OfflineSettingsUiHandler.hasOfferedRestorePrompt = true;
+    backupManager.markRestorePromptOffered();
 
     const providerName = backupManager.getActiveProvider().displayName;
 

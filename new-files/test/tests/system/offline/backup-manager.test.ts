@@ -250,6 +250,49 @@ describe("System - Offline - backup-manager", () => {
     });
   });
 
+  describe("restore prompt offered flag", () => {
+    it("is false until marked", () => {
+      expect(backupManager.hasOfferedRestorePrompt()).toBe(false);
+      backupManager.markRestorePromptOffered();
+      expect(backupManager.hasOfferedRestorePrompt()).toBe(true);
+    });
+
+    it("survives being read again (persisted, not in-memory)", () => {
+      backupManager.markRestorePromptOffered();
+      expect(backupManager.hasOfferedRestorePrompt()).toBe(true);
+      expect(backupManager.hasOfferedRestorePrompt()).toBe(true);
+    });
+
+    it("is cleared by a successful authenticateActiveProvider() call", async () => {
+      backupManager.markRestorePromptOffered();
+      providerA.authenticated = false;
+
+      await backupManager.authenticateActiveProvider();
+
+      expect(backupManager.hasOfferedRestorePrompt()).toBe(false);
+    });
+
+    it("is left untouched if authenticateActiveProvider() throws", async () => {
+      backupManager.switchProvider("provider-b");
+      backupManager.markRestorePromptOffered();
+      providerB.authenticate = async () => {
+        throw new Error("auth failed");
+      };
+
+      await expect(backupManager.authenticateActiveProvider()).rejects.toThrow("auth failed");
+
+      expect(backupManager.hasOfferedRestorePrompt()).toBe(true);
+    });
+
+    it("is cleared by disconnectActiveProvider()", async () => {
+      backupManager.markRestorePromptOffered();
+
+      await backupManager.disconnectActiveProvider();
+
+      expect(backupManager.hasOfferedRestorePrompt()).toBe(false);
+    });
+  });
+
   describe("per-provider fingerprint storage", () => {
     it("keeps Google Drive's fingerprint key unsuffixed for zero-migration compatibility", async () => {
       backupManager.__setProvidersForTest([

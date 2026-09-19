@@ -23,6 +23,7 @@ const SESSION_KEY_PATTERN = /^sessionData\d*_/;
 
 const ACTIVE_PROVIDER_KEY = "pkrOfflineSync_activeProvider";
 const LAST_ATTEMPT_KEY = "pkrOfflineSync_lastAttempt";
+const RESTORE_PROMPT_OFFERED_KEY = "pkrOfflineSync_restorePromptOffered";
 
 /** First provider ever shipped — kept as the default for existing users, and the one whose fingerprint key stays unsuffixed (no migration). */
 const DEFAULT_PROVIDER_ID = "google-drive";
@@ -96,6 +97,7 @@ async function forgetProvider(provider: BackupProvider): Promise<void> {
  */
 export async function disconnectActiveProvider(): Promise<void> {
   await forgetProvider(getActiveProvider());
+  localStorage.removeItem(RESTORE_PROMPT_OFFERED_KEY);
 }
 
 /**
@@ -109,6 +111,27 @@ export async function authenticateActiveProvider(): Promise<void> {
   const active = getActiveProvider();
   await active.authenticate();
   await Promise.all(providers.filter(p => p.id !== active.id).map(p => forgetProvider(p)));
+  localStorage.removeItem(RESTORE_PROMPT_OFFERED_KEY);
+}
+
+/**
+ * Whether the "a backup was found, restore it?" prompt has already been
+ * offered for the current connection. Persisted (not in-memory) because the
+ * prompt's own "yes" path reloads the page — an in-memory flag would forget
+ * it was already offered and re-ask on the very next silent
+ * `tryRestoreSession()` reconnect. Cleared only by a genuinely new
+ * connection ({@link authenticateActiveProvider}, which covers both a fresh
+ * sign-in and switching to another provider) or an explicit
+ * {@link disconnectActiveProvider}, so a silent reconnect of the *same*
+ * already-known connection never re-triggers it.
+ */
+export function hasOfferedRestorePrompt(): boolean {
+  return localStorage.getItem(RESTORE_PROMPT_OFFERED_KEY) === "1";
+}
+
+/** Marks the restore prompt as offered for the current connection — see {@link hasOfferedRestorePrompt}. */
+export function markRestorePromptOffered(): void {
+  localStorage.setItem(RESTORE_PROMPT_OFFERED_KEY, "1");
 }
 
 function getFingerprint(providerId: string): RememberedFingerprint | null {
