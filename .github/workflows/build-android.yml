@@ -17,6 +17,10 @@ on:
         required: false
         type: string
         default: 'main'
+      version_override:
+        description: 'Override the app version baked into this build (e.g. 1.12.0.0). Lets the installed app report an older version than pagefaultgames/pokerogue currently declares, for testing the update-checker against real existing releases. Leave blank to use whatever upstream currently has.'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -48,7 +52,21 @@ jobs:
 
       - name: Get PokeRogue version
         id: pokerogue_version
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
         run: |
+          if [ -n "$VERSION_OVERRIDE" ]; then
+            if ! [[ "$VERSION_OVERRIDE" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+              echo "ERROR: version_override '$VERSION_OVERRIDE' must look like #.#.#[.#]" >&2
+              exit 1
+            fi
+            node -e "
+              const fs = require('fs');
+              const pkg = require('./pokerogue-src/package.json');
+              pkg.version = process.env.VERSION_OVERRIDE;
+              fs.writeFileSync('./pokerogue-src/package.json', JSON.stringify(pkg, null, 2) + '\n');
+            "
+          fi
           VERSION=$(node -p "require('./pokerogue-src/package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 

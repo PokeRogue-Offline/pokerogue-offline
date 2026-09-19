@@ -13,14 +13,17 @@ on:
         required: false
         type: string
         default: 'main'
-      # TEMPORARY - remove this input and the -f version_override line below
-      # (in "Trigger iOS build") after this one release ships. Only iOS's
-      # version.txt feeds the combined release's tag/name (see the "Read
-      # version" step below), so overriding it there alone is enough to make
-      # every platform's update-checker see this release as strictly newer,
-      # without touching any platform's real, upstream-mirrored app version.
+      # Forwarded to all five build workflows so every platform bakes in and
+      # reports the SAME version - each platform clones its own pokerogue-src
+      # and compiles its own package.json version into its own bundle, so
+      # overriding only one platform would make its title-screen version text
+      # (and in-app update-checker) disagree with the others for one release.
+      # Leave blank for normal behavior (each platform uses upstream's actual
+      # version, as usual). Only set this to force the update-checker to fire
+      # on a release that doesn't bump the (upstream-owned) app version - e.g.
+      # a fork-only hotfix - pick something below the next real upstream bump.
       version_override:
-        description: 'TEMPORARY: fake app version for this release only (e.g. 1.12.0.25), used solely to force the update-checker to fire on a build-number-only release. Leave blank for normal behavior.'
+        description: 'Fake app version for every platform in this release (e.g. 1.12.0.25). Leave blank for normal behavior.'
         required: false
         type: string
 
@@ -69,7 +72,8 @@ jobs:
           gh workflow run build-android.yml --ref "${{ github.ref_name }}" \
             -f build_number=${{ steps.build.outputs.number }} \
             -f dev=${{ inputs.dev }} \
-            -f branch=${{ inputs.branch || 'main' }}
+            -f branch=${{ inputs.branch || 'main' }} \
+            -f version_override=${{ inputs.version_override }}
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
       - name: Trigger AppImage build
@@ -81,7 +85,8 @@ jobs:
           gh workflow run build-appimage.yml --ref "${{ github.ref_name }}" \
             -f build_number=${{ steps.build.outputs.number }} \
             -f dev=${{ inputs.dev }} \
-            -f branch=${{ inputs.branch || 'main' }}
+            -f branch=${{ inputs.branch || 'main' }} \
+            -f version_override=${{ inputs.version_override }}
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
       - name: Trigger Windows build
@@ -93,7 +98,8 @@ jobs:
           gh workflow run build-exe.yml --ref "${{ github.ref_name }}" \
             -f build_number=${{ steps.build.outputs.number }} \
             -f dev=${{ inputs.dev }} \
-            -f branch=${{ inputs.branch || 'main' }}
+            -f branch=${{ inputs.branch || 'main' }} \
+            -f version_override=${{ inputs.version_override }}
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
       - name: Trigger macOS build
@@ -105,7 +111,8 @@ jobs:
           gh workflow run build-macos.yml --ref "${{ github.ref_name }}" \
             -f build_number=${{ steps.build.outputs.number }} \
             -f dev=${{ inputs.dev }} \
-            -f branch=${{ inputs.branch || 'main' }}
+            -f branch=${{ inputs.branch || 'main' }} \
+            -f version_override=${{ inputs.version_override }}
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
 
