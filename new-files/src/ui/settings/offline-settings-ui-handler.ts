@@ -83,6 +83,19 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   /** True while a Force Daily Seed fetch is in flight — prevents a double-tap. */
   private forceSeedInProgress = false;
 
+  /**
+   * True once we've offered the "a backup was found on Drive, restore it?"
+   * prompt this session — static so it survives navigating away from and
+   * back to the Offline tab (a fresh instance is constructed per UiMode
+   * switch in some flows), but is NOT persisted across app relaunches,
+   * matching "invisible in normal operation" for a device that's already
+   * caught up. Set at the very start of the check (before any await), not
+   * after it resolves, so the two trigger paths below (explicit Connect
+   * press, and the silent tryRestoreSession() on tab open) can't both slip
+   * past a stale guard if they resolve close together.
+   */
+  private static hasOfferedRestorePrompt = false;
+
   constructor(mode: UiMode | null = null) {
     super(SettingType.APP, mode);
     this.title = "Offline";
@@ -213,6 +226,60 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     );
   }
 
+  /**
+   * One-time-per-session prompt offered right after a successful sign-in
+   * (explicit Connect press, or the silent tab-open reconnect): if a backup
+   * already exists on Drive, ask whether to restore it now. This is the
+   * practical fix for a device that's never synced before (and so would
+   * otherwise just silently decline to auto-upload once it starts making
+   * progress) — it gives the player an easy, obvious way to catch up before
+   * ever reaching an auto-sync checkpoint. Still routes through the exact
+   * same manual restoreFromBackup() codepath as the "Restore Backup" button
+   * — loading remains a player decision, just offered rather than requiring
+   * the player to dig through Settings.
+   *
+   * No-ops (no dialog at all) if no backup exists — a first-time user
+   * connecting for the first time should see nothing.
+   */
+  private offerRestorePromptIfNeeded(): void {
+    if (OfflineSettingsUiHandler.hasOfferedRestorePrompt) {
+      return;
+    }
+    OfflineSettingsUiHandler.hasOfferedRestorePrompt = true;
+
+    offlineBackup
+      .getRemoteLastPlayed()
+      .then(lastPlayed => {
+        if (!lastPlayed) {
+          return;
+        }
+        const ui = this.getUi();
+        ui.showText(
+          `A backup was found on Google Drive (last played ${lastPlayed}). Restore it now? This will overwrite your current local save.`,
+          null,
+          () => {
+            ui.setOverlayMode(
+              UiMode.CONFIRM,
+              () => {
+                ui.revertMode();
+                this.showText("", 0);
+                this.performRestore();
+              },
+              () => {
+                ui.revertMode();
+                this.showText("", 0);
+              },
+              false,
+              0,
+            );
+          },
+        );
+      })
+      .catch(err => {
+        console.warn("Failed to check for an existing Drive backup to offer restoring:", err);
+      });
+  }
+
   /** Guard for the top of every action handler except Connect itself. */
   private requireSignedIn(): boolean {
     if (offlineBackup.isSignedIn()) {
@@ -264,9 +331,12 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
       this.setRowText(SettingKeys.Offline_Google_Connect, "Checking connection…");
       offlineBackup
         .tryRestoreSession()
-        .then(() => {
+        .then(restored => {
           this.refreshDisplay();
           this.refreshDriveLastPlayed();
+          if (restored) {
+            this.offerRestorePromptIfNeeded();
+          }
         })
         .catch(err => {
           console.warn("Silent session restore failed:", err);
@@ -320,6 +390,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
       .then(() => {
         this.refreshDisplay();
         this.refreshDriveLastPlayed();
+        this.offerRestorePromptIfNeeded();
       })
       .catch(err => {
         console.error("Google sign-in failed:", err);

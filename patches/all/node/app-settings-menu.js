@@ -167,6 +167,25 @@ if (fs.existsSync(BACKUP_MODULE_PATH)) {
   writeFile(BACKUP_MODULE_PATH, src);
 }
 
+const BACKUP_MODULE_TEST_PATH = path.join(
+  "pokerogue-src",
+  "test",
+  "tests",
+  "system",
+  "offline",
+  "google-drive-backup.test.ts",
+);
+
+if (fs.existsSync(BACKUP_MODULE_TEST_PATH)) {
+  console.log("SKIP google-drive-backup.test.ts — already exists");
+} else {
+  const testSrc = fs.readFileSync(
+    path.join(NEW_FILES_DIR, "test", "tests", "system", "offline", "google-drive-backup.test.ts"),
+    "utf8",
+  );
+  writeFile(BACKUP_MODULE_TEST_PATH, testSrc);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Sub-patch 3: src/ui/settings/offline-settings-ui-handler.ts  (new file)
 // ─────────────────────────────────────────────────────────────────────────────

@@ -2,16 +2,77 @@
  * Cross-platform Google Drive backup helper for PokeRogue-Offline.
  *
  * Backs up every localStorage key EXCEPT in-progress session data
- * (`sessionData`, `sessionData1`..`sessionData4`, per-user) to the user's
- * hidden Drive "appDataFolder" — UNLESS the "Include Current Run" setting
- * (Offline tab) is turned on, in which case session keys are included too.
- * Manual-trigger only — no auto-sync of any kind, in either direction.
+ * (`sessionData`, `sessionData1`..`sessionData4`, per-user) and this module's
+ * own local-only sync bookkeeping (`pkrOfflineSync_*`, see below) to the
+ * user's hidden Drive "appDataFolder" — UNLESS the "Include Current Run"
+ * setting (Offline tab) is turned on, in which case session keys are
+ * included too.
+ *
+ * Two upload paths:
+ *  - {@link backupSave} — manual, forced, unconditional. Always overwrites
+ *    the remote file, since it's a deliberate player action ("Backup Save").
+ *  - {@link autoSyncCheckpoint} — automatic, called by a patched wave-advance
+ *    hook every 5 waves (matching the online game's own server-checkpoint
+ *    cadence, see patches/all/node/auto-drive-sync.js). Gated by a dirty
+ *    flag, a debounce interval, AND an anti-overwrite safety check (below) —
+ *    never forces an overwrite.
  *
  * Restore ({@link restoreFromBackup}) downloads the existing backup file and
  * writes every key it contains straight back into localStorage — including
  * session keys, if the backup happens to have them (i.e. it was made with
- * "Include Current Run" on). No separate "detect and restore session" logic
- * is needed: restore just writes back whatever's actually in the file.
+ * "Include Current Run" on). Restore, like backup-save, remains entirely
+ * manual-only — auto-sync only ever pushes local data up, it never pulls
+ * remote data down on its own.
+ *
+ * ── Anti-overwrite design ───────────────────────────────────────────────
+ *
+ * The problem: the same Google account can be signed into multiple devices,
+ * each with its own local save. Device clocks aren't trustworthy or synced
+ * across devices, and Drive API v3 has no compare-and-swap / conditional
+ * write, so the "is it safe to overwrite" check and the upload itself can't
+ * be made atomic. Without a safeguard, an older device could silently
+ * overwrite a newer device's uploaded progress the moment it hits its own
+ * 5-wave checkpoint, without the player ever deciding that should happen.
+ *
+ * The fix: an ETag-style optimistic-concurrency fingerprint, using Drive's
+ * own per-file revision identity (`headRevisionId`, falling back to
+ * `md5Checksum`) instead of any wall-clock comparison. Every successful
+ * upload or restore remembers that fingerprint locally
+ * (`pkrOfflineSync_fingerprint`, deliberately excluded from the backup
+ * payload itself via `SYNC_STATE_KEY_PATTERN` — this is device-local
+ * bookkeeping, not save data). Before an AUTO upload, the remote's current
+ * fingerprint is re-checked (as part of the same metadata lookup
+ * {@link findExistingBackupFile} already makes before every upload, so this
+ * costs no extra round-trip): if it still matches what this device
+ * remembers, nothing else has written to Drive since this device last
+ * synced, so it's safe to overwrite. If it differs — or nothing is
+ * remembered yet, e.g. this device has never synced against this account —
+ * a remote write this device doesn't know about exists, and the auto-upload
+ * is silently skipped (no dialog, no retry storm — just wait for the next
+ * checkpoint, or for the player to manually Backup Save / Restore Backup,
+ * either of which re-establishes the baseline).
+ *
+ * As a zero-cost defense-in-depth fallback (in case Drive were ever to not
+ * populate `headRevisionId`/`md5Checksum` for an appDataFolder file, which
+ * contradicts Drive API v3's own documented behavior for files with opaque
+ * binary content, but isn't verifiable against a live account from this
+ * environment), every upload also writes a self-issued `syncToken` inside
+ * the JSON payload itself. It's only ever read back via an extra content
+ * fetch if the metadata fields are genuinely absent on both sides.
+ *
+ * This is NOT airtight: the metadata check and the write are still two
+ * sequential HTTP calls, so a narrow TOCTOU race remains — two devices could
+ * both pass the safety check and then both write before either one's
+ * fingerprint updates. This is an accepted, deliberate residual: auto-sync
+ * is debounced to infrequent, single, non-concurrent writes (not a hot
+ * loop), the collision requires the same player actively progressing on two
+ * devices at the exact same moment, and the failure mode is still manually
+ * recoverable via Backup Save / Restore Backup. Drive API v3 offers no way
+ * to close this window entirely.
+ *
+ * Manual save/restore are intentionally exempt from all of the above: manual
+ * save always overwrites unconditionally (deliberate player action), and
+ * manual restore is unaffected since it never writes to Drive.
  *
  * Token model: on Electron, main.cjs now requests offline access and
  * persists a refresh token (encrypted via Electron's safeStorage where
@@ -37,6 +98,16 @@ const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 // Matches sessionData_<user>, sessionData1_<user> ... sessionData4_<user>.
 const SESSION_KEY_PATTERN = /^sessionData\d*_/;
 
+// Matches this module's own local-only sync bookkeeping keys (fingerprint,
+// debounce timestamp) — never uploaded, never restored.
+const SYNC_STATE_KEY_PATTERN = /^pkrOfflineSync_/;
+
+const FINGERPRINT_KEY = "pkrOfflineSync_fingerprint";
+const LAST_ATTEMPT_KEY = "pkrOfflineSync_lastAttempt";
+
+/** Minimum time between auto-sync upload attempts, regardless of how often checkpoints fire. */
+const AUTO_SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000;
+
 declare global {
   interface Window {
     // Injected by @capacitor/core at runtime on Android/iOS builds.
@@ -61,6 +132,15 @@ function isElectron(): boolean {
 }
 
 let cachedAccessToken: string | null = null;
+
+/**
+ * True once a local save has happened since the last successful upload (auto
+ * or manual) — set by {@link autoSyncCheckpoint} every time it's invoked
+ * (i.e. every wave-hook checkpoint, since that only fires after a successful
+ * local save), cleared only after a successful upload/restore. In-memory
+ * only: it only needs to survive within one running session.
+ */
+let isDirty = false;
 
 /** Whether we currently hold an access token from a prior sign-in this session. */
 export function isSignedIn(): boolean {
@@ -187,7 +267,10 @@ function includeCurrentRunEnabled(): boolean {
 
 /**
  * Collect every localStorage key/value — session keys included only if the
- * "Include Current Run" toggle (Offline settings tab) is on.
+ * "Include Current Run" toggle (Offline settings tab) is on. This module's
+ * own local-only sync bookkeeping (`pkrOfflineSync_*`) is always excluded —
+ * it describes this device's relationship to Drive, not save data, and must
+ * never be uploaded or restored.
  */
 function collectBackupPayload(): Record<string, string> {
   const includeSession = includeCurrentRunEnabled();
@@ -200,6 +283,9 @@ function collectBackupPayload(): Record<string, string> {
     if (!includeSession && SESSION_KEY_PATTERN.test(key)) {
       continue;
     }
+    if (SYNC_STATE_KEY_PATTERN.test(key)) {
+      continue;
+    }
     const value = localStorage.getItem(key);
     if (value !== null) {
       payload[key] = value;
@@ -208,12 +294,26 @@ function collectBackupPayload(): Record<string, string> {
   return payload;
 }
 
-/** Find an existing backup file's Drive file ID inside appDataFolder, if one exists. */
-async function findExistingBackupFileId(accessToken: string): Promise<string | null> {
+/** The subset of Drive file metadata used as an anti-overwrite fingerprint. */
+interface DriveFileInfo {
+  id: string;
+  headRevisionId: string | null;
+  md5Checksum: string | null;
+}
+
+/** The fingerprint of the last upload/restore this device performed, remembered locally. */
+interface SyncFingerprint {
+  headRevisionId: string | null;
+  md5Checksum: string | null;
+  syncToken: string | null;
+}
+
+/** Find the existing backup file inside appDataFolder, if one exists, along with its revision fingerprint. */
+async function findExistingBackupFile(accessToken: string): Promise<DriveFileInfo | null> {
   const params = new URLSearchParams({
     spaces: "appDataFolder",
     q: `name = '${BACKUP_FILE_NAME}'`,
-    fields: "files(id, modifiedTime)",
+    fields: "files(id, modifiedTime, headRevisionId, md5Checksum)",
   });
 
   const res = await fetch(`${DRIVE_FILES_URL}?${params.toString()}`, {
@@ -225,23 +325,132 @@ async function findExistingBackupFileId(accessToken: string): Promise<string | n
   }
 
   const body = await res.json();
-  return body.files?.[0]?.id ?? null;
+  const file = body.files?.[0];
+  if (!file) {
+    return null;
+  }
+  return {
+    id: file.id,
+    headRevisionId: file.headRevisionId ?? null,
+    md5Checksum: file.md5Checksum ?? null,
+  };
+}
+
+function getFingerprint(): SyncFingerprint | null {
+  try {
+    const raw = localStorage.getItem(FINGERPRINT_KEY);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error("google-drive-backup: failed to read sync fingerprint", err);
+    return null;
+  }
+}
+
+function setFingerprint(fingerprint: SyncFingerprint): void {
+  localStorage.setItem(FINGERPRINT_KEY, JSON.stringify(fingerprint));
+}
+
+function getLastAutoSyncAttempt(): number {
+  const raw = localStorage.getItem(LAST_ATTEMPT_KEY);
+  const parsed = raw ? Number(raw) : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function setLastAutoSyncAttempt(ms: number): void {
+  localStorage.setItem(LAST_ATTEMPT_KEY, String(ms));
 }
 
 /**
- * Uploads (or overwrites) the single backup file in the user's Drive
- * appDataFolder. Returns the ISO timestamp the backup was made at.
+ * Pure decision function: is it safe for auto-sync to overwrite the remote
+ * backup? Compares this device's remembered fingerprint (from its last
+ * successful upload/restore) against the remote file's current fingerprint.
+ *
+ *  - No remote file exists → safe (nothing to overwrite).
+ *  - Remote file exists but nothing is remembered locally → unsafe (this
+ *    device has never synced against this account/file — exactly the
+ *    "device B never loaded device A's upload" scenario).
+ *  - Remote file exists and a fingerprint is remembered → safe only if the
+ *    remembered and remote fingerprints still match (nothing else has
+ *    written to Drive since this device last synced).
+ *
+ * Deliberately does NOT attempt the `syncToken` content-fetch fallback —
+ * that requires a network call and is handled by the async wrapper
+ * {@link resolveAutoUploadSafety} around this function instead, so this stays
+ * synchronous and easy to unit test.
  */
-export async function backupSave(): Promise<string> {
-  if (!cachedAccessToken) {
-    throw new Error("Not signed in — call signIn() first.");
+export function isSafeToAutoUpload(remembered: SyncFingerprint | null, remote: DriveFileInfo | null): boolean {
+  if (!remote) {
+    return true;
   }
+  if (!remembered) {
+    return false;
+  }
+  if (remembered.headRevisionId && remote.headRevisionId) {
+    return remembered.headRevisionId === remote.headRevisionId;
+  }
+  if (remembered.md5Checksum && remote.md5Checksum) {
+    return remembered.md5Checksum === remote.md5Checksum;
+  }
+  return false;
+}
 
+/** Downloads the remote backup's content purely to read its embedded `syncToken` field. */
+async function fetchRemoteSyncToken(accessToken: string, fileId: string): Promise<string | null> {
+  const res = await fetch(`${DRIVE_FILES_URL}/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    return null;
+  }
+  const parsed = await res.json();
+  return typeof parsed?.syncToken === "string" ? parsed.syncToken : null;
+}
+
+/**
+ * Wraps {@link isSafeToAutoUpload} with the `syncToken` content-fetch
+ * fallback for the (unexpected, per Drive API v3's documented behavior)
+ * case where the remote file has neither `headRevisionId` nor
+ * `md5Checksum` populated. Only reachable in that case — the common path
+ * never makes an extra network call.
+ */
+async function resolveAutoUploadSafety(
+  accessToken: string,
+  remembered: SyncFingerprint | null,
+  remote: DriveFileInfo | null,
+): Promise<boolean> {
+  if (!remote || !remembered) {
+    return isSafeToAutoUpload(remembered, remote);
+  }
+  const hasComparableMetadata =
+    !!(remembered.headRevisionId && remote.headRevisionId) || !!(remembered.md5Checksum && remote.md5Checksum);
+  if (hasComparableMetadata) {
+    return isSafeToAutoUpload(remembered, remote);
+  }
+  if (remembered.syncToken) {
+    const remoteSyncToken = await fetchRemoteSyncToken(accessToken, remote.id);
+    if (remoteSyncToken) {
+      return remembered.syncToken === remoteSyncToken;
+    }
+  }
+  return false;
+}
+
+interface UploadResult {
+  madeAt: string;
+  headRevisionId: string | null;
+  md5Checksum: string | null;
+  syncToken: string;
+}
+
+/** Shared multipart upload body, used by both the forced manual path and the gated auto path. */
+async function performUpload(accessToken: string, existingId: string | null): Promise<UploadResult> {
   const payload = collectBackupPayload();
   const madeAt = new Date().toISOString();
-  const fileContent = JSON.stringify({ backedUpAt: madeAt, data: payload });
-
-  const existingId = await findExistingBackupFileId(cachedAccessToken);
+  const syncToken = crypto.randomUUID();
+  const fileContent = JSON.stringify({ backedUpAt: madeAt, syncToken, data: payload });
 
   const metadata = existingId ? { name: BACKUP_FILE_NAME } : { name: BACKUP_FILE_NAME, parents: ["appDataFolder"] };
 
@@ -255,14 +464,15 @@ export async function backupSave(): Promise<string> {
     `${fileContent}\r\n` +
     `--${boundary}--`;
 
+  const params = new URLSearchParams({ uploadType: "multipart", fields: "id,headRevisionId,md5Checksum" });
   const url = existingId
-    ? `${DRIVE_UPLOAD_URL}/${existingId}?uploadType=multipart`
-    : `${DRIVE_UPLOAD_URL}?uploadType=multipart`;
+    ? `${DRIVE_UPLOAD_URL}/${existingId}?${params.toString()}`
+    : `${DRIVE_UPLOAD_URL}?${params.toString()}`;
 
   const res = await fetch(url, {
     method: existingId ? "PATCH" : "POST",
     headers: {
-      Authorization: `Bearer ${cachedAccessToken}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": `multipart/related; boundary=${boundary}`,
     },
     body: multipartBody,
@@ -272,7 +482,88 @@ export async function backupSave(): Promise<string> {
     throw new Error(`Drive upload failed: ${res.status} ${await res.text()}`);
   }
 
-  return madeAt;
+  const body = await res.json();
+  return {
+    madeAt,
+    headRevisionId: body.headRevisionId ?? null,
+    md5Checksum: body.md5Checksum ?? null,
+    syncToken,
+  };
+}
+
+/**
+ * Uploads (or overwrites) the single backup file in the user's Drive
+ * appDataFolder, unconditionally — this is the forced, manual "Backup Save"
+ * path, and always wins regardless of what's currently on Drive, since it's
+ * a deliberate player action. Returns the ISO timestamp the backup was made
+ * at.
+ */
+export async function backupSave(): Promise<string> {
+  if (!cachedAccessToken) {
+    throw new Error("Not signed in — call signIn() first.");
+  }
+
+  const existing = await findExistingBackupFile(cachedAccessToken);
+  const result = await performUpload(cachedAccessToken, existing?.id ?? null);
+
+  setFingerprint({
+    headRevisionId: result.headRevisionId,
+    md5Checksum: result.md5Checksum,
+    syncToken: result.syncToken,
+  });
+  isDirty = false;
+
+  return result.madeAt;
+}
+
+/**
+ * Called by the patched wave-advance hook (patches/all/node/auto-drive-sync.js)
+ * every 5 waves — the same cadence the online game itself checkpoints on.
+ * Uploads only if: signed in, the minimum debounce interval has elapsed
+ * since the last attempt, there's something dirty to upload, AND the
+ * anti-overwrite safety check passes. Never throws — any failure is logged
+ * and swallowed, so a Drive hiccup can never interrupt gameplay. Always
+ * fire-and-forget from the caller's perspective (`void autoSyncCheckpoint()`).
+ */
+export async function autoSyncCheckpoint(): Promise<void> {
+  isDirty = true;
+
+  if (!cachedAccessToken) {
+    return;
+  }
+  if (Date.now() - getLastAutoSyncAttempt() < AUTO_SYNC_MIN_INTERVAL_MS) {
+    return;
+  }
+  if (!isDirty) {
+    return;
+  }
+
+  try {
+    const remote = await findExistingBackupFile(cachedAccessToken);
+    const remembered = getFingerprint();
+
+    const safe = await resolveAutoUploadSafety(cachedAccessToken, remembered, remote);
+    if (!safe) {
+      // A remote write exists that this device doesn't know about — skip
+      // silently rather than clobber it. Still record the attempt so a busy
+      // stretch of checkpoints doesn't retry the (cheap, but not free)
+      // metadata lookup every single wave; the next checkpoint after the
+      // debounce window will re-check.
+      setLastAutoSyncAttempt(Date.now());
+      return;
+    }
+
+    const result = await performUpload(cachedAccessToken, remote?.id ?? null);
+    setFingerprint({
+      headRevisionId: result.headRevisionId,
+      md5Checksum: result.md5Checksum,
+      syncToken: result.syncToken,
+    });
+    setLastAutoSyncAttempt(Date.now());
+    isDirty = false;
+  } catch (err) {
+    console.warn("pkr-offline: auto-sync checkpoint failed, will retry at the next checkpoint:", err);
+  }
 }
 
 /**
@@ -280,10 +571,15 @@ export async function backupSave(): Promise<string> {
  * contains directly into localStorage. Whether that includes session keys
  * depends entirely on whether the backup was made with "Include Current
  * Run" on — this function doesn't special-case it either way, it just
- * writes back whatever the file actually has. The caller is still expected
- * to force a reload afterward so the game actually picks up the restored
- * data, since most of it (save data, unlocks, dex) is only ever read once
- * at boot.
+ * writes back whatever the file actually has (this module's own
+ * `pkrOfflineSync_*` bookkeeping keys are skipped defensively, in case an
+ * older backup ever contained any). The caller is still expected to force a
+ * reload afterward so the game actually picks up the restored data, since
+ * most of it (save data, unlocks, dex) is only ever read once at boot.
+ *
+ * After a successful restore, this device's remembered fingerprint is reset
+ * to match the just-downloaded file exactly — local now mirrors remote, so
+ * there's nothing new to auto-upload until something actually changes.
  *
  * Throws if there's no existing backup to restore from.
  */
@@ -292,12 +588,12 @@ export async function restoreFromBackup(): Promise<void> {
     throw new Error("Not signed in — call signIn() first.");
   }
 
-  const existingId = await findExistingBackupFileId(cachedAccessToken);
-  if (!existingId) {
+  const existing = await findExistingBackupFile(cachedAccessToken);
+  if (!existing) {
     throw new Error("No backup found in Google Drive to restore from.");
   }
 
-  const res = await fetch(`${DRIVE_FILES_URL}/${existingId}?alt=media`, {
+  const res = await fetch(`${DRIVE_FILES_URL}/${existing.id}?alt=media`, {
     headers: { Authorization: `Bearer ${cachedAccessToken}` },
   });
 
@@ -309,8 +605,18 @@ export async function restoreFromBackup(): Promise<void> {
   const data: Record<string, string> = parsed?.data ?? {};
 
   for (const [key, value] of Object.entries(data)) {
+    if (SYNC_STATE_KEY_PATTERN.test(key)) {
+      continue;
+    }
     localStorage.setItem(key, value);
   }
+
+  setFingerprint({
+    headRevisionId: existing.headRevisionId,
+    md5Checksum: existing.md5Checksum,
+    syncToken: typeof parsed?.syncToken === "string" ? parsed.syncToken : null,
+  });
+  isDirty = false;
 }
 
 /**
@@ -327,12 +633,12 @@ export async function getRemoteLastPlayed(): Promise<string | null> {
     throw new Error("Not signed in — call signIn() first.");
   }
 
-  const existingId = await findExistingBackupFileId(cachedAccessToken);
-  if (!existingId) {
+  const existing = await findExistingBackupFile(cachedAccessToken);
+  if (!existing) {
     return null;
   }
 
-  const res = await fetch(`${DRIVE_FILES_URL}/${existingId}?alt=media`, {
+  const res = await fetch(`${DRIVE_FILES_URL}/${existing.id}?alt=media`, {
     headers: { Authorization: `Bearer ${cachedAccessToken}` },
   });
 
