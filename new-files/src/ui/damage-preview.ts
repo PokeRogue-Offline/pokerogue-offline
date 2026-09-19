@@ -79,10 +79,10 @@ function formatSingleHit(defender: EnemyPokemon, minRaw: number, maxRaw: number)
 
   if (!defender.isBoss()) {
     if (minRaw >= hp) {
-      return "Guaranteed 1HKO";
+      return "OHKO";
     }
     if (minRaw * 2 >= hp) {
-      return "Guaranteed 2HKO";
+      return "2HKO";
     }
     return formatRange(Math.min(minRaw, hp), Math.min(maxRaw, hp), maxHp);
   }
@@ -99,7 +99,7 @@ function formatSingleHit(defender: EnemyPokemon, minRaw: number, maxRaw: number)
   const adjustedMax = Math.min(adjustedMaxRaw, finalBossCap);
 
   if (adjustedMin >= hp) {
-    return "Guaranteed 1HKO";
+    return "OHKO";
   }
 
   // Guaranteed (worst-roll) shield break: a weighted-random stat boost may
@@ -117,7 +117,7 @@ function formatSingleHit(defender: EnemyPokemon, minRaw: number, maxRaw: number)
   const finalBossCap2 = isClassicFinalBossPhaseOne(enemy) ? hpAfterHit1 - 1 : hpAfterHit1;
   const adjustedMin2 = Math.min(adjustedMin2Raw, finalBossCap2);
   if (adjustedMin2 >= hpAfterHit1) {
-    return "Guaranteed 2HKO";
+    return "2HKO";
   }
 
   return formatRange(adjustedMin, adjustedMax, maxHp);
@@ -134,7 +134,7 @@ export function computeDamageRangeText(attacker: Pokemon, defender: EnemyPokemon
     if (defender.isBossImmune() || !move.applyConditions(attacker, defender, -1)) {
       return undefined;
     }
-    return "Guaranteed OHKO";
+    return "OHKO";
   }
 
   if (move.hasAttr("FixedDamageAttr")) {

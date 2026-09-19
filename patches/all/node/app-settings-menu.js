@@ -452,8 +452,9 @@ if (settingsSrc.includes("SettingType.APP")) {
   },
   {
     // Fight-menu damage-range/KO-label preview (patches/all/node/damage-preview.js).
-    // Off by default - shows a range like "21%-38%" or a "Guaranteed 1HKO"/
-    // "Guaranteed 2HKO"/"Breaks Shield" label next to each enemy's info box.
+    // Off by default - shows a range like "21%-38%" or an "OHKO"/"2HKO"/
+    // "Breaks Shield" label next to each enemy's info box, replacing the
+    // type-effectiveness multiplier there while it's shown.
     key: SettingKeys.Offline_Damage_Range,
     label: "Damage Range",
     options: [

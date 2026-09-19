@@ -57,7 +57,7 @@ describe("UI - Damage Preview", () => {
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("30%-36%");
     });
 
-    it("labels a Guaranteed 1HKO when even the minimum roll would faint the target", async () => {
+    it("labels an OHKO when even the minimum roll would faint the target", async () => {
       await game.classicMode.startBattle(SpeciesId.MAGIKARP);
       const attacker = game.field.getPlayerPokemon();
       const defender = game.field.getEnemyPokemon();
@@ -67,10 +67,10 @@ describe("UI - Damage Preview", () => {
       vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 100 });
 
       // minRaw = floor(100 * 0.85) = 85 >= hp(50)
-      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("Guaranteed 1HKO");
+      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("OHKO");
     });
 
-    it("labels a Guaranteed 2HKO when the minimum roll needs exactly two hits", async () => {
+    it("labels a 2HKO when the minimum roll needs exactly two hits", async () => {
       await game.classicMode.startBattle(SpeciesId.MAGIKARP);
       const attacker = game.field.getPlayerPokemon();
       const defender = game.field.getEnemyPokemon();
@@ -80,7 +80,7 @@ describe("UI - Damage Preview", () => {
       vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 60 });
 
       // minRaw = floor(60 * 0.85) = 51; 51 < 90 (not 1HKO), 51*2 = 102 >= 90 (2HKO)
-      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("Guaranteed 2HKO");
+      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("2HKO");
     });
 
     it("does not label a KO when neither the min roll nor double the min roll would faint the target", async () => {
@@ -145,7 +145,7 @@ describe("UI - Damage Preview", () => {
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("Breaks Shield");
     });
 
-    it("labels a Guaranteed 1HKO against a boss when the clamped min roll still drains all remaining HP", async () => {
+    it("labels an OHKO against a boss when the clamped min roll still drains all remaining HP", async () => {
       await game.classicMode.startBattle(SpeciesId.MAGIKARP);
       const attacker = game.field.getPlayerPokemon();
       const defender = game.field.getEnemyPokemon();
@@ -157,7 +157,7 @@ describe("UI - Damage Preview", () => {
       vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 200 });
 
       // minRaw = floor(200*0.85) = 170 >= hp(100)
-      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("Guaranteed 1HKO");
+      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("OHKO");
     });
   });
 
@@ -181,8 +181,8 @@ describe("UI - Damage Preview", () => {
       });
 
       const text = computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE]);
-      expect(text).not.toBe("Guaranteed 1HKO");
-      expect(text).not.toBe("Guaranteed 2HKO");
+      expect(text).not.toBe("OHKO");
+      expect(text).not.toBe("2HKO");
     });
   });
 

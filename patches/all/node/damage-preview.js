@@ -134,11 +134,19 @@ if (fightUiSrc.includes("updateDamageRange")) {
     FOR_EACH_ANCHOR,
     `    pokemon.getOpponents().forEach(opponent => {\n` +
       `      const enemy = opponent as EnemyPokemon;\n` +
-      `      enemy.updateEffectiveness(this.getEffectivenessText(pokemon, opponent, pokemonMove));\n` +
       `      // Offline: damage-range preview, off by default (Offline settings tab).\n` +
-      `      enemy.updateDamageRange(\n` +
-      `        isDamageRangeEnabled() ? computeDamageRangeText(pokemon, enemy, pokemonMove.getMove()) : undefined,\n` +
-      `      );\n` +
+      `      // When available, it replaces the type-effectiveness multiplier in the\n` +
+      `      // same box rather than stacking alongside it.\n` +
+      `      const damageRangeText = isDamageRangeEnabled()\n` +
+      `        ? computeDamageRangeText(pokemon, enemy, pokemonMove.getMove())\n` +
+      `        : undefined;\n` +
+      `      if (damageRangeText !== undefined) {\n` +
+      `        enemy.updateEffectiveness(undefined);\n` +
+      `        enemy.updateDamageRange(damageRangeText);\n` +
+      `      } else {\n` +
+      `        enemy.updateEffectiveness(this.getEffectivenessText(pokemon, opponent, pokemonMove));\n` +
+      `        enemy.updateDamageRange(undefined);\n` +
+      `      }\n` +
       `    });`,
   );
 
@@ -241,11 +249,13 @@ if (enemyInfoSrc.includes("updateDamageRange")) {
       `\n` +
       `    this.effectivenessContainer.add([this.effectivenessWindow, this.effectivenessText]);\n` +
       `\n` +
-      `    // Offline: damage-range preview, positioned just below the effectiveness hint.\n` +
+      `    // Offline: damage-range preview. Shares the effectiveness hint's slot -\n` +
+      `    // fight-ui-handler.ts shows at most one of the two at a time (damage\n` +
+      `    // range takes priority when available), so there's no overlap.\n` +
       `    this.damageRangeContainer = globalScene.add\n` +
       `      .container(0, 0)\n` +
       `      .setVisible(false)\n` +
-      `      .setPositionRelative(this.type1Icon, 22, 14);\n` +
+      `      .setPositionRelative(this.type1Icon, 22, 4);\n` +
       `    this.add(this.damageRangeContainer);\n` +
       `\n` +
       `    this.damageRangeText = addTextObject(5, 4.5, "", TextStyle.BATTLE_INFO);\n` +
@@ -253,10 +263,11 @@ if (enemyInfoSrc.includes("updateDamageRange")) {
       `\n` +
       `    this.damageRangeContainer.add([this.damageRangeWindow, this.damageRangeText]);\n` +
       `\n` +
-      `    // Offline: enemy HP% preview, positioned near the HP bar.\n` +
+      `    // Offline: enemy HP% preview, overlaid centered on the HP bar itself\n` +
+      `    // (avoids needing extra horizontal/vertical room in the compact enemy box).\n` +
       `    this.hpPercentText = addTextObject(0, 0, "", TextStyle.BATTLE_INFO)\n` +
-      `      .setVisible(false)\n` +
-      `      .setPositionRelative(this.hpBar, 0, 10);\n` +
+      `      .setOrigin(0.5, 0.5)\n` +
+      `      .setVisible(false);\n` +
       `    this.add(this.hpPercentText);\n` +
       `  }`,
   );
@@ -301,7 +312,7 @@ if (enemyInfoSrc.includes("updateDamageRange")) {
       `      this.hpPercentText.setVisible(false);\n` +
       `      return;\n` +
       `    }\n` +
-      `    this.hpPercentText.setPositionRelative(this.hpBar, 0, 10);\n` +
+      `    this.hpPercentText.setPositionRelative(this.hpBar, this.hpBar.width / 2, this.hpBar.height / 2);\n` +
       `    this.hpPercentText.setText(computeHpPercentText(pokemon)).setVisible(true);\n` +
       `  }`,
   );
