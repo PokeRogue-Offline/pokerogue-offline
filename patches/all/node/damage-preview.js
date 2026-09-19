@@ -265,7 +265,12 @@ if (enemyInfoSrc.includes("updateDamageRange")) {
       `\n` +
       `    // Offline: enemy HP% preview, overlaid centered on the HP bar itself\n` +
       `    // (avoids needing extra horizontal/vertical room in the compact enemy box).\n` +
-      `    this.hpPercentText = addTextObject(0, 0, "", TextStyle.BATTLE_INFO)\n` +
+      `    // A solid black outline keeps it legible against the bar's fill color,\n` +
+      `    // which the default near-white BATTLE_INFO text + soft shadow blends into.\n` +
+      `    this.hpPercentText = addTextObject(0, 0, "", TextStyle.BATTLE_INFO, {\n` +
+      `      stroke: "#000000",\n` +
+      `      strokeThickness: 8,\n` +
+      `    })\n` +
       `      .setOrigin(0.5, 0.5)\n` +
       `      .setVisible(false);\n` +
       `    this.add(this.hpPercentText);\n` +
