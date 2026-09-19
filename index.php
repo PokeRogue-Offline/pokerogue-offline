@@ -42,7 +42,7 @@ include __DIR__ . '/partials/head.php';
       <a href="/features.php" class="platform-card">
         <span class="platform-card-icon">✨</span>
         <p class="platform-card-title">Features</p>
-        <p class="platform-card-desc">Local saves, live daily seed, Google Drive backup, Gacha Calendar, and more.</p>
+        <p class="platform-card-desc">Local saves, live daily seed, cloud backup, Gacha Calendar, and more.</p>
         <p class="platform-card-arrow">→ See what's included</p>
       </a>
       <a href="/install.php" class="platform-card">
@@ -60,7 +60,7 @@ include __DIR__ . '/partials/head.php';
       <a href="/save.php" class="platform-card">
         <span class="platform-card-icon">💾</span>
         <p class="platform-card-title">Save Data</p>
-        <p class="platform-card-desc">Import your online progress, or back it up straight to Google Drive.</p>
+        <p class="platform-card-desc">Import your online progress, or back it up straight to Google Drive or Dropbox.</p>
         <p class="platform-card-arrow">→ Manage your save</p>
       </a>
       <a href="/contact.php" class="platform-card">

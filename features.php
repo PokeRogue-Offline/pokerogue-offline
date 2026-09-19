@@ -30,19 +30,34 @@ include __DIR__ . '/partials/head.php';
         <p class="feature-title">Clear All Data</p>
         <p class="feature-desc">Wipe all local save data with one tap via <strong>Settings → Offline</strong>. Use with caution.</p>
       </div>
-      <div class="feature-card highlight">
+      <div class="feature-card">
         <span class="feature-icon">📅</span>
-        <p class="feature-title">Live Daily Seed <span class="new-tag">New</span></p>
+        <p class="feature-title">Live Daily Seed</p>
         <p class="feature-desc">The <em>only</em> offline client that loads the actual server daily seed — including special event daily runs.</p>
       </div>
       <div class="feature-card highlight">
         <span class="feature-icon">☁️</span>
-        <p class="feature-title">Google Drive Backup <span class="new-tag">New</span></p>
-        <p class="feature-desc">Connect your Google account under <strong>Settings → Offline</strong> to back up and restore your save to a private Drive app folder — no manual file transfers needed.</p>
+        <p class="feature-title">Cloud Backup <span class="new-tag">New</span></p>
+        <p class="feature-desc">Connect either <strong>Google Drive</strong> or <strong>Dropbox</strong> under <strong>Settings → Offline</strong> to back up and restore your save. Access is limited to a private, app-only folder — nothing else on your account is ever touched.</p>
       </div>
       <div class="feature-card highlight">
+        <span class="feature-icon">🔄</span>
+        <p class="feature-title">Automatic Backups <span class="new-tag">New</span></p>
+        <p class="feature-desc">Once a provider is connected, your save quietly backs itself up in the background every few waves — no need to remember to hit Backup Save. Manual Backup/Restore are still there whenever you want them.</p>
+      </div>
+      <div class="feature-card highlight">
+        <span class="feature-icon">📊</span>
+        <p class="feature-title">Showdown-Style Battle Info <span class="new-tag">New</span></p>
+        <p class="feature-desc">Turn on the <strong>Damage Range</strong> and <strong>Enemy HP %</strong> settings to see a predicted damage percentage (or a "Guaranteed KO" label) for each move, and read enemy HP as an exact percentage instead of guessing from the bar.</p>
+      </div>
+      <div class="feature-card highlight">
+        <span class="feature-icon">🔔</span>
+        <p class="feature-title">Smarter Update Notifications <span class="new-tag">New</span></p>
+        <p class="feature-desc">An "Update Available!" hint shows on the title screen the moment a new version ships, with a paginated changelog viewer to see exactly what's new. The <strong>Update Pop-Ups</strong> setting controls whether that changelog also opens automatically.</p>
+      </div>
+      <div class="feature-card">
         <span class="feature-icon">🎰</span>
-        <p class="feature-title">Gacha Calendar <span class="new-tag">New</span></p>
+        <p class="feature-title">Gacha Calendar</p>
         <p class="feature-desc">A new entry under <strong>Egg Gacha</strong> in the pause menu shows which species is boosted in the Legendary gacha for any day of the month.</p>
       </div>
       <div class="feature-card">

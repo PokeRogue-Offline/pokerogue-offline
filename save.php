@@ -27,20 +27,20 @@ include __DIR__ . '/partials/head.php';
     <div class="install-card" style="margin-top:1.5rem;">
       <div class="card-header">
         <div>
-          <h3 class="card-title">☁️ Or Back Up to Google Drive</h3>
+          <h3 class="card-title">☁️ Or Back Up to the Cloud</h3>
         </div>
         <span class="badge badge-recommended">New</span>
       </div>
       <p style="margin-bottom:1.25rem; color: var(--text-dim); font-size:0.97rem;">
-        Prefer not to shuttle files around? Connect a Google account from the in-game Settings menu and back up or restore your save straight from a private Drive app folder.
+        Prefer not to shuttle files around? Connect either Google Drive or Dropbox from the in-game Settings menu and back up or restore your save straight from a private, app-only folder. Once connected, a backup also runs automatically in the background every few waves — no need to remember to do it yourself.
       </p>
       <div class="steps">
         <div class="step-row"><span class="step-n">1</span><span>Open <strong>Settings → Offline</strong> (the tab next to General/Display/Audio)</span></div>
-        <div class="step-row"><span class="step-n">2</span><span>Tap <strong>Connect</strong> and sign in with Google</span></div>
-        <div class="step-row"><span class="step-n">3</span><span>Tap <strong>Backup Save</strong> to upload, or <strong>Restore Backup</strong> to pull it down on another device</span></div>
+        <div class="step-row"><span class="step-n">2</span><span>Choose a <strong>Backup Provider</strong> — Google Drive or Dropbox — then tap <strong>Connect Account</strong> and sign in</span></div>
+        <div class="step-row"><span class="step-n">3</span><span>Tap <strong>Backup Save</strong> to upload manually anytime, or <strong>Restore Backup</strong> to pull it down on another device</span></div>
       </div>
       <div class="card-note">
-        Only the app's own hidden Drive folder is used — see the <a href="/privacy.php">Privacy Policy</a> for exactly what's accessed and how to revoke it.
+        Only the app's own hidden app folder is used on either provider — see the <a href="/privacy.php">Privacy Policy</a> for exactly what's accessed and how to revoke it.
       </div>
     </div>
   </section>

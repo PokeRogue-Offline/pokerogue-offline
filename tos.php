@@ -114,7 +114,7 @@ include __DIR__ . '/partials/head.php';
       </div>
       <div class="step-body">
         <p>
-          The app may interact with third-party services (e.g., Google Drive) for optional features such as
+          The app may interact with third-party services (e.g., Google Drive, Dropbox) for optional features such as
           save backup. Your use of those services is subject to the applicable third party's own terms and
           privacy policy. The developer(s) of PokéRogue Offline are not responsible for the availability,
           conduct, or policies of third-party services.
