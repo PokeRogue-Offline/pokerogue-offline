@@ -19,10 +19,11 @@ apply_patch "offline-banner.js"       all
 apply_patch "update-check.js"         all
 apply_patch "update-title-labels.js"  all
 
-apply_patch "app-settings-menu.js" all
-apply_patch "auto-drive-sync.js"   all
-apply_patch "gacha-calendar.js"    all
-apply_patch "community-menu.js"    all
+apply_patch "app-settings-menu.js"            all
+apply_patch "auto-drive-sync.js"              all
+apply_patch "externalize-capacitor-imports.js" all
+apply_patch "gacha-calendar.js"               all
+apply_patch "community-menu.js"               all
 
 apply_patch "update-available-screen.js" all
 
