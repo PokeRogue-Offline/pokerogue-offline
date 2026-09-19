@@ -6,6 +6,18 @@
  * General/Display/Audio/Gamepad/Keyboard), via NavigationManager's
  * documented extension point.
  *
+ * v8 of this patch. Changes from v7:
+ *   - FIX: tab-switching (L/R shoulder buttons, R/F keys — Button.CYCLE_SHINY
+ *     / Button.CYCLE_FORM) didn't work while the Offline tab was active, so
+ *     there was no way to navigate off of it back to the other settings
+ *     tabs. Root cause: src/ui-inputs.ts's buttonCycleOption() gates those
+ *     buttons behind a hardcoded whitelist of UI handler classes before
+ *     forwarding them to UI.processInput() (which is what BaseSettingsUiHandler
+ *     needs in order to run its own tab-switch case); OfflineSettingsUiHandler
+ *     was never added to that whitelist, even though it extends the same
+ *     BaseSettingsUiHandler as every whitelisted settings tab. New sub-patch 9
+ *     adds it.
+ *
  * v7 of this patch. Changes from v6 (verified working):
  *   - Backups are now pluggable across providers (Google Drive, Dropbox),
  *     routed through new #system/offline/backup-manager.ts — see that file
@@ -115,6 +127,12 @@
  *        from here is safe even though it isn't the active tab. The Offline
  *        tab's own show() still does the same check independently, so this
  *        is purely a latency optimization, not a correctness dependency.
+ *
+ *   9. src/ui-inputs.ts
+ *        Import OfflineSettingsUiHandler and append it to the `whitelist`
+ *        array in buttonCycleOption() — see the v8 changelog note above.
+ *        Without this, Button.CYCLE_SHINY/CYCLE_FORM (the tab-switch keys)
+ *        are silently dropped while the Offline tab is active.
  *
  * NOTE ON TESTING: all sub-patches have been checked against a fresh clone
  * of pagefaultgames/pokerogue and the anchors are confirmed present at the
@@ -557,6 +575,35 @@ if (generalTabSrc.includes("app-settings-menu: prewarm")) {
   generalTabSrc = generalTabSrc.replace(CLASS_END_ANCHOR, CLASS_END_REPLACEMENT);
 
   writeFile(GENERAL_TAB_PATH, generalTabSrc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-patch 9: src/ui-inputs.ts  →  add OfflineSettingsUiHandler to the
+//   buttonCycleOption() whitelist, so Button.CYCLE_SHINY/CYCLE_FORM (the
+//   tab-switch keys) actually reach the Offline tab's processInput().
+// ─────────────────────────────────────────────────────────────────────────────
+
+const UI_INPUTS_PATH = path.join("pokerogue-src", "src", "ui-inputs.ts");
+let uiInputsSrc = readFile(UI_INPUTS_PATH);
+
+if (uiInputsSrc.includes("OfflineSettingsUiHandler")) {
+  console.log("SKIP ui-inputs.ts — OfflineSettingsUiHandler already present");
+} else {
+  const IMPORT_ANCHOR = `import { SettingsKeyboardUiHandler } from "#ui/keyboard-settings-ui-handler";`;
+  requireAnchor(uiInputsSrc, IMPORT_ANCHOR, "SettingsKeyboardUiHandler import in ui-inputs.ts");
+  uiInputsSrc = uiInputsSrc.replace(
+    IMPORT_ANCHOR,
+    `${IMPORT_ANCHOR}\nimport { OfflineSettingsUiHandler } from "#ui/offline-settings-ui-handler";`,
+  );
+
+  const WHITELIST_ANCHOR = `SettingsKeyboardUiHandler,\n    ];`;
+  requireAnchor(uiInputsSrc, WHITELIST_ANCHOR, "whitelist array in buttonCycleOption() in ui-inputs.ts");
+  uiInputsSrc = uiInputsSrc.replace(
+    WHITELIST_ANCHOR,
+    `SettingsKeyboardUiHandler,\n      OfflineSettingsUiHandler,\n    ];`,
+  );
+
+  writeFile(UI_INPUTS_PATH, uiInputsSrc);
 }
 
 console.log("\napp-settings-menu patch applied successfully.");
