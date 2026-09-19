@@ -35,7 +35,7 @@
  * Sub-patches, applied in order:
  *
  *   1. src/enums/ui-mode.ts
- *        Append APP_SETTINGS (after ALERT_MODAL, the last entry).
+ *        Append SETTINGS_OFFLINE (after ALERT_MODAL, the last entry).
  *
  *   2. src/system/offline/google-drive-backup.ts  (new file)
  *        Cross-platform (Capacitor / Electron) Drive backup helper.
@@ -52,10 +52,10 @@
  *
  *   4. src/ui/ui.ts
  *        Import OfflineSettingsUiHandler, register at the position
- *        matching UiMode.APP_SETTINGS, add to noTransitionModes.
+ *        matching UiMode.SETTINGS_OFFLINE, add to noTransitionModes.
  *
  *   5. src/ui/settings/navigation-menu.ts
- *        Append UiMode.APP_SETTINGS + a hardcoded "Offline" label to
+ *        Append UiMode.SETTINGS_OFFLINE + a hardcoded "Offline" label to
  *        NavigationManager's `modes`/`labels` arrays — this is what actually
  *        makes it show up as a 6th tab in the real Settings screen.
  *
@@ -134,18 +134,23 @@ function requireAnchor(src, anchor, label) {
 const NEW_FILES_DIR = path.join(__dirname, "..", "..", "..", "new-files");
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-patch 1: src/enums/ui-mode.ts  →  append APP_SETTINGS
+// Sub-patch 1: src/enums/ui-mode.ts  →  append SETTINGS_OFFLINE
 // ─────────────────────────────────────────────────────────────────────────────
 
 const UI_MODE_PATH = path.join("pokerogue-src", "src", "enums", "ui-mode.ts");
 let uiModeSrc = readFile(UI_MODE_PATH);
 
-if (uiModeSrc.includes("APP_SETTINGS")) {
-  console.log("SKIP ui-mode.ts — APP_SETTINGS already present");
+if (uiModeSrc.includes("SETTINGS_OFFLINE")) {
+  console.log("SKIP ui-mode.ts — SETTINGS_OFFLINE already present");
 } else {
   const ANCHOR = "ALERT_MODAL,";
   requireAnchor(uiModeSrc, ANCHOR, "ALERT_MODAL in ui-mode.ts");
-  uiModeSrc = uiModeSrc.replace(ANCHOR, `${ANCHOR}\n  APP_SETTINGS,`);
+  // Must start with "SETTINGS" — index.css shows the touch-controls F/R
+  // (prev/next tab) buttons via `[data-ui-mode^="SETTINGS"]`, matched against
+  // this enum key's string name (ui.ts sets `dataset.uiMode = UiMode[mode]`).
+  // Naming this APP_SETTINGS (as earlier versions of this patch did) makes
+  // those buttons vanish on the Offline tab since the prefix no longer matches.
+  uiModeSrc = uiModeSrc.replace(ANCHOR, `${ANCHOR}\n  SETTINGS_OFFLINE,`);
   writeFile(UI_MODE_PATH, uiModeSrc);
 }
 
@@ -201,7 +206,7 @@ if (uiSrc.includes("OfflineSettingsUiHandler")) {
 
   const NO_TRANSITION_ANCHOR = `UiMode.ALERT_MODAL,`;
   requireAnchor(uiSrc, NO_TRANSITION_ANCHOR, "UiMode.ALERT_MODAL in noTransitionModes");
-  uiSrc = uiSrc.replace(NO_TRANSITION_ANCHOR, `${NO_TRANSITION_ANCHOR}\n  UiMode.APP_SETTINGS,`);
+  uiSrc = uiSrc.replace(NO_TRANSITION_ANCHOR, `${NO_TRANSITION_ANCHOR}\n  UiMode.SETTINGS_OFFLINE,`);
 
   writeFile(UI_PATH, uiSrc);
 }
@@ -213,12 +218,12 @@ if (uiSrc.includes("OfflineSettingsUiHandler")) {
 const NAV_PATH = path.join("pokerogue-src", "src", "ui", "settings", "navigation-menu.ts");
 let navSrc = readFile(NAV_PATH);
 
-if (navSrc.includes("UiMode.APP_SETTINGS")) {
-  console.log("SKIP navigation-menu.ts — APP_SETTINGS tab already present");
+if (navSrc.includes("UiMode.SETTINGS_OFFLINE")) {
+  console.log("SKIP navigation-menu.ts — SETTINGS_OFFLINE tab already present");
 } else {
   const MODES_ANCHOR = `UiMode.SETTINGS_KEYBOARD,\n    ];`;
   requireAnchor(navSrc, MODES_ANCHOR, "modes array in navigation-menu.ts");
-  navSrc = navSrc.replace(MODES_ANCHOR, `UiMode.SETTINGS_KEYBOARD,\n      UiMode.APP_SETTINGS,\n    ];`);
+  navSrc = navSrc.replace(MODES_ANCHOR, `UiMode.SETTINGS_KEYBOARD,\n      UiMode.SETTINGS_OFFLINE,\n    ];`);
 
   const LABELS_ANCHOR = `i18next.t("settings:keyboard"),\n    ];`;
   requireAnchor(navSrc, LABELS_ANCHOR, "labels array in navigation-menu.ts");
