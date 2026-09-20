@@ -120,7 +120,7 @@ include __DIR__ . '/partials/head.php';
 
           <div class="callout warning">
             <span class="callout-icon">⚠️</span>
-            <span><strong>iOS 26.4 users:</strong> SideStore's stable release has a known bug on iOS 26.4. When selecting an app to install, choose the <strong>Nightly</strong> build. You can also get it manually from the <a href="https://nightly.sidestore.io/" target="_blank">SideStore Nightly page</a>.</span>
+            <span><strong>On a brand-new iOS version (like iOS 27)?</strong> SideStore's stable release can temporarily break right after a major iOS update until it's patched — this happened with several iOS 26.x releases. If the stable build fails to install, refresh, or sign, choose the <strong>Nightly</strong> build instead, or get it manually from the <a href="https://nightly.sidestore.io/" target="_blank">SideStore Nightly page</a>.</span>
           </div>
 
           <div class="steps">
