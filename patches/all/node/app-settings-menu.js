@@ -6,6 +6,20 @@
  * General/Display/Audio/Gamepad/Keyboard), via NavigationManager's
  * documented extension point.
  *
+ * v9 of this patch. Changes from v8:
+ *   - NEW "Touch Button Opacity" row — a 10-step (10%-100%) slider for the
+ *     always-visible idle opacity of the on-screen D-pad/action buttons
+ *     (patches/all/node/touch-overlay-idle-opacity.js adds the matching
+ *     --touch-control-idle-opacity CSS var those elements now read). Hidden
+ *     on non-touchscreen builds via isHidden, same as upstream's own
+ *     Touch_Controls/Move_Touch_Controls rows. Unlike every other row this
+ *     file has added so far, this one also needs a new case in settings.ts's
+ *     setSetting() switch (modeled on upstream's own Shop_Overlay_Opacity
+ *     case) so the value applies live and on boot-hydration — sub-patch 6
+ *     now touches that switch in addition to its usual SettingType/
+ *     SettingKeys/Setting[] anchors, plus a brand new anchor near the top of
+ *     settings.ts for the options array (next to SHOP_OVERLAY_OPACITY_OPTIONS).
+ *
  * v8 of this patch. Changes from v7:
  *   - FIX: tab-switching (L/R shoulder buttons, R/F keys — Button.CYCLE_SHINY
  *     / Button.CYCLE_FORM) didn't work while the Offline tab was active, so
@@ -95,14 +109,17 @@
  *        makes it show up as a 6th tab in the real Settings screen.
  *
  *   6. src/system/settings/settings.ts
- *        Append SettingType.APP; append 12 SettingKeys entries; append 12
- *        Setting entries (grouped: 2 always-on "Backup Provider"/"Connect
- *        Account" action rows, 1 locked "Disconnect Account" action row,
- *        3 more locked action/toggle rows, 1 read-only info row, 1 always-on
- *        action row, then 1 always-on action row + 3 always-on read-only
- *        info rows — Value, Fetched, Expires — for the daily seed cache) to
- *        the shared Setting[] array, all type: APP so they only ever show
- *        up on our tab.
+ *        Append a TOUCH_OVERLAY_OPACITY_OPTIONS array (new anchor, next to
+ *        upstream's SHOP_OVERLAY_OPACITY_OPTIONS); append SettingType.APP;
+ *        append 13 SettingKeys entries; append 13 Setting entries (grouped:
+ *        2 always-on "Backup Provider"/"Connect Account" action rows, 1
+ *        locked "Disconnect Account" action row, 3 more locked action/toggle
+ *        rows, 1 read-only info row, 1 always-on action row, then 1
+ *        always-on action row + 3 always-on read-only info rows — Value,
+ *        Fetched, Expires — for the daily seed cache, then "Touch Button
+ *        Opacity") to the shared Setting[] array, all type: APP so they only
+ *        ever show up on our tab; append a case to the setSetting() switch
+ *        (new anchor) so "Touch Button Opacity" applies live/on boot.
  *
  *   7. src/ui/settings/base-settings-ui-handler.ts
  *        Widen `settingLabels`, `optionValueLabels`, `optionCursors`, and
@@ -305,6 +322,27 @@ let settingsSrc = readFile(SETTINGS_PATH);
 if (settingsSrc.includes("SettingType.APP")) {
   console.log("SKIP settings.ts — SettingType.APP already present");
 } else {
+  // 6a-pre. TOUCH_OVERLAY_OPACITY_OPTIONS — new options array, anchored next
+  // to upstream's own SHOP_OVERLAY_OPACITY_OPTIONS. 10 steps (10..100) since,
+  // unlike the shop overlay, there's nothing underneath these buttons that
+  // full opacity would obscure.
+  const OPACITY_OPTIONS_ANCHOR = `const SHOP_OVERLAY_OPACITY_OPTIONS: SettingOption[] = [];
+for (let i = 0; i < 9; i++) {
+  const value = ((i + 1) * 10).toString();
+  SHOP_OVERLAY_OPACITY_OPTIONS.push({ value, label: value });
+}`;
+  requireAnchor(settingsSrc, OPACITY_OPTIONS_ANCHOR, "SHOP_OVERLAY_OPACITY_OPTIONS in settings.ts");
+  settingsSrc = settingsSrc.replace(
+    OPACITY_OPTIONS_ANCHOR,
+    `${OPACITY_OPTIONS_ANCHOR}
+
+const TOUCH_OVERLAY_OPACITY_OPTIONS: SettingOption[] = [];
+for (let i = 0; i < 10; i++) {
+  const value = ((i + 1) * 10).toString();
+  TOUCH_OVERLAY_OPACITY_OPTIONS.push({ value, label: value });
+}`,
+  );
+
   // 6a. SettingType enum — append APP.
   const TYPE_ANCHOR = `export enum SettingType {\n  GENERAL,\n  DISPLAY,\n  AUDIO,\n}`;
   requireAnchor(settingsSrc, TYPE_ANCHOR, "SettingType enum in settings.ts");
@@ -313,7 +351,7 @@ if (settingsSrc.includes("SettingType.APP")) {
     `export enum SettingType {\n  GENERAL,\n  DISPLAY,\n  AUDIO,\n  APP,\n}`,
   );
 
-  // 6b. SettingKeys — append 12 new keys.
+  // 6b. SettingKeys — append 13 new keys.
   const KEYS_ANCHOR = `Prefer_Baton_Pass: "PREFER_BATON_PASS",\n};`;
   requireAnchor(settingsSrc, KEYS_ANCHOR, "SettingKeys object in settings.ts");
   settingsSrc = settingsSrc.replace(
@@ -334,10 +372,11 @@ if (settingsSrc.includes("SettingType.APP")) {
   Offline_Update_Pop_Ups: "OFFLINE_UPDATE_POP_UPS",
   Offline_Damage_Range: "OFFLINE_DAMAGE_RANGE",
   Offline_Enemy_Hp_Percent: "OFFLINE_ENEMY_HP_PERCENT",
+  Offline_Touch_Overlay_Opacity: "OFFLINE_TOUCH_OVERLAY_OPACITY",
 };`,
   );
 
-  // 6c. Setting[] array — append 12 new rows, locked ones grouped together.
+  // 6c. Setting[] array — append 13 new rows, locked ones grouped together.
   const SETTING_ANCHOR = `  {
     key: SettingKeys.Prefer_Baton_Pass,
     label: i18next.t("settings:preferBatonPass"),
@@ -495,7 +534,48 @@ if (settingsSrc.includes("SettingType.APP")) {
     default: 0,
     type: SettingType.APP,
   },
+  {
+    // Idle opacity of the on-screen D-pad/action buttons
+    // (patches/all/node/touch-overlay-idle-opacity.js adds the
+    // --touch-control-idle-opacity CSS var those elements read). Applied
+    // live/on boot by the Offline_Touch_Overlay_Opacity case added to
+    // setSetting() below. Hidden on non-touchscreen builds, same as
+    // upstream's own Touch_Controls/Move_Touch_Controls rows.
+    key: SettingKeys.Offline_Touch_Overlay_Opacity,
+    label: "Touch Button Opacity",
+    options: TOUCH_OVERLAY_OPACITY_OPTIONS,
+    default: 7, // 80%, matches the current hardcoded idle opacity
+    type: SettingType.APP,
+    isHidden: () => !hasTouchscreen(),
+  },
 ];`,
+  );
+
+  // 6d. setSetting() switch — new anchor (this file has never touched the
+  // switch before; every prior Offline row was self-contained via the
+  // generic cycle-and-persist mechanism). Modeled directly on upstream's own
+  // Shop_Overlay_Opacity case, right above it in the switch.
+  const SWITCH_ANCHOR = `    case SettingKeys.Shop_Overlay_Opacity:
+      globalScene.updateShopOverlayOpacity(Number.parseInt(Setting[index].options[value].value) * 0.01);
+      break;
+  }`;
+  requireAnchor(settingsSrc, SWITCH_ANCHOR, "Shop_Overlay_Opacity case in setSetting() switch");
+  settingsSrc = settingsSrc.replace(
+    SWITCH_ANCHOR,
+    `    case SettingKeys.Shop_Overlay_Opacity:
+      globalScene.updateShopOverlayOpacity(Number.parseInt(Setting[index].options[value].value) * 0.01);
+      break;
+    case SettingKeys.Offline_Touch_Overlay_Opacity: {
+      const touchControls = document.getElementById("touchControls");
+      if (touchControls) {
+        touchControls.style.setProperty(
+          "--touch-control-idle-opacity",
+          (Number.parseInt(Setting[index].options[value].value, 10) * 0.01).toString(),
+        );
+      }
+      break;
+    }
+  }`,
   );
 
   writeFile(SETTINGS_PATH, settingsSrc);

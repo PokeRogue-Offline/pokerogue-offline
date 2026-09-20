@@ -20,11 +20,22 @@
  *   which both flips the live flag and persists it to localStorage. The
  *   listener is a no-op once touch controls are already enabled.
  *
+ *   Gated two ways: (a) the listener callback resets and returns immediately
+ *   whenever touch controls are already enabled — it only ever does
+ *   anything while they're off; (b) the listener isn't installed at all
+ *   unless running as the native mobile app (`isCapacitor()`, imported from
+ *   backup-provider.ts — see app-settings-menu.js sub-patch 2, which this
+ *   patch depends on having already run, per apply-patches.sh's existing
+ *   order). Without (b) this would also fire on the Electron desktop builds
+ *   (Windows/macOS/Linux AppImage), where re-enabling a touch overlay via a
+ *   quadruple-tap gesture doesn't make sense.
+ *
  * Sub-patches, applied in order:
  *
  *   1. src/touch-controls.ts
  *        Add `enableTouchControlsOnQuadrupleTap()`, exported alongside the
- *        existing `preventDoubleTapZoom()`.
+ *        existing `preventDoubleTapZoom()`; import `isCapacitor` from
+ *        backup-provider.ts and gate the function body on it.
  *
  *   2. src/main.ts
  *        Import and call the new function once at startup, next to the
@@ -73,6 +84,15 @@ let touchControlsSrc = readFile(TOUCH_CONTROLS_PATH);
 if (touchControlsSrc.includes("enableTouchControlsOnQuadrupleTap")) {
   console.log("SKIP touch-controls.ts — enableTouchControlsOnQuadrupleTap already present");
 } else {
+  const IMPORT_ANCHOR = `import { globalScene } from "#app/global-scene";`;
+  requireAnchor(touchControlsSrc, IMPORT_ANCHOR, "globalScene import in touch-controls.ts");
+  // Depends on app-settings-menu.js sub-patch 2 having already written
+  // backup-provider.ts — guaranteed by apply-patches.sh's existing order.
+  touchControlsSrc = touchControlsSrc.replace(
+    IMPORT_ANCHOR,
+    `${IMPORT_ANCHOR}\nimport { isCapacitor } from "#system/offline/backup-provider";`,
+  );
+
   const ANCHOR = "/**\n * Check if the device has a touchscreen.";
   requireAnchor(touchControlsSrc, ANCHOR, "hasTouchscreen doc comment in touch-controls.ts");
 
@@ -84,8 +104,15 @@ const QUADRUPLE_TAP_COUNT = 4;
  * anywhere on the page and re-enables touch controls when it sees them. This gives players
  * who accidentally disable touch controls on a touchscreen device a way to turn them back on
  * without needing to navigate the settings menu. Intended to be called once at startup.
+ *
+ * No-op on non-native builds (Electron desktop) - the gesture only makes sense on the real
+ * mobile app.
  */
 export function enableTouchControlsOnQuadrupleTap(): void {
+  if (!isCapacitor()) {
+    return;
+  }
+
   let tapTimestamps: number[] = [];
 
   document.addEventListener(
