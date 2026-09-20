@@ -36,6 +36,7 @@ export interface ReleaseInfo {
 interface GhRelease {
   tag_name: string;
   draft: boolean;
+  prerelease: boolean;
   body: string | null;
 }
 
@@ -99,7 +100,10 @@ async function fetchAllReleases(): Promise<GhRelease[]> {
     url = parseNextLink(response.headers.get("Link"));
   }
 
-  return releases.filter(r => !r.draft);
+  // A release is published prerelease:true and manually flipped off once
+  // ready to go live - prerelease releases are treated the same as drafts
+  // and hidden from the updater until then.
+  return releases.filter(r => !r.draft && !r.prerelease);
 }
 
 /**

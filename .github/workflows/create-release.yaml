@@ -26,6 +26,11 @@ on:
         description: 'Fake app version for every platform in this release (e.g. 1.12.0.25). Leave blank for normal behavior.'
         required: false
         type: string
+      skip_altstore:
+        description: 'Skip updating the AltStore source (seed branch repo.json). The GitHub release is still published and will still be picked up by the in-app updater for all users - this only keeps it out of the AltStore feed.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   actions: write   # needed to trigger and query other workflow runs
@@ -503,14 +508,14 @@ jobs:
       # appIcon.png is also re-copied from `main` in case the icon changed.
       # -----------------------------------------------------------------------
       - name: Checkout seed branch
-        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        if: ${{ steps.gate.outputs.is_release == 'true' && inputs.skip_altstore != true }}
         uses: actions/checkout@v4
         with:
           ref: seed
           path: seed-branch
 
       - name: Update AltStore source on seed branch
-        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        if: ${{ steps.gate.outputs.is_release == 'true' && inputs.skip_altstore != true }}
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ steps.build.outputs.number }}
@@ -519,7 +524,7 @@ jobs:
         run: node scripts/update-altstore-source.js
 
       - name: Commit AltStore source to seed branch
-        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        if: ${{ steps.gate.outputs.is_release == 'true' && inputs.skip_altstore != true }}
         run: |
           cp docs/appIcon.png seed-branch/docs/appIcon.png
           cd seed-branch

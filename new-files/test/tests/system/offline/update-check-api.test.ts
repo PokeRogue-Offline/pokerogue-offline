@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 interface FakeRelease {
   tag_name: string;
   draft?: boolean;
+  prerelease?: boolean;
   body?: string | null;
 }
 
@@ -66,6 +67,17 @@ describe("System - Offline - update-check-api", () => {
       mockReleases([
         { tag_name: "v1.12.0.5-204", draft: true, body: "" },
         { tag_name: "not-a-valid-tag", body: "" },
+        { tag_name: "v1.12.0.6-211", body: "" },
+      ]);
+
+      const result = await checkForUpdates("1.0.0.0", 0);
+
+      expect(result.map(r => r.version)).toEqual(["1.12.0.6"]);
+    });
+
+    it("ignores prerelease releases until manually flipped to a full release", async () => {
+      mockReleases([
+        { tag_name: "v1.12.0.5-204", prerelease: true, body: "" },
         { tag_name: "v1.12.0.6-211", body: "" },
       ]);
 
