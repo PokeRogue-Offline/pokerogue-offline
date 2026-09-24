@@ -34,8 +34,7 @@ apply_patch "update-available-screen.js" all
 if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
 
   # Targeted Patches
-  apply_patch "android-import-fix.js"        mobile
-  apply_patch "export-fix.js"                mobile
+  apply_patch "native-save-io.js"            mobile
   apply_patch "background-audio-pause.js"    mobile
 fi
 

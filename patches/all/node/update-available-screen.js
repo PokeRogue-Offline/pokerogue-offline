@@ -4,16 +4,20 @@
  *
  * Registers the "Update Available" screen (paginated, scrollable changelog
  * viewer) as a new UiMode. This is the display half of the update-checker
- * feature; update-check.js (which must run before this, so
- * SETTINGS_OFFLINE_BACKUP/SETTINGS_OFFLINE_PREFERENCES/GACHA_CALENDAR
- * already exist as the enum's/handlers array's last entries) is what
- * actually calls `globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases)`.
+ * feature; update-check.js is what actually calls
+ * `globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases)`.
+ *
+ * Independent of app-settings-menu.js/gacha-calendar.js: like those two
+ * patches, this one anchors on the stable upstream `ALERT_MODAL,` /
+ * `new AlertModalUiHandler(),` markers rather than on whatever the
+ * previously-run offline patch happened to append last, so it can be
+ * added or removed in any order relative to them.
  *
  * Sub-patches, applied in order:
  *
  *   1. src/enums/ui-mode.ts
- *        Append UPDATE_AVAILABLE (after SETTINGS_OFFLINE_PREFERENCES, the
- *        last entry at the time this patch runs).
+ *        Append UPDATE_AVAILABLE (after ALERT_MODAL, a stable upstream
+ *        entry - same anchor app-settings-menu.js/gacha-calendar.js use).
  *
  *   2. src/ui/utils/markdown-to-bbcode.ts  (new file, plus its test)
  *        Small markdown-subset -> BBCode converter used to render the
@@ -23,9 +27,10 @@
  *        The screen itself. Copied verbatim from new-files/.
  *
  *   4. src/ui/ui.ts
- *        Import UpdateAvailableUiHandler, register at the position matching
- *        UiMode.UPDATE_AVAILABLE (end of the handlers array, since it's the
- *        last UiMode entry), add to noTransitionModes.
+ *        Import UpdateAvailableUiHandler, register right after
+ *        AlertModalUiHandler in the handlers array (must land at the same
+ *        relative position as UPDATE_AVAILABLE in the enum - see comment
+ *        at the handler-array anchor below), add to noTransitionModes.
  *
  * No menu-ui-handler.ts changes - this screen is only ever opened
  * programmatically from the update checker, never from the pause menu.
@@ -72,8 +77,8 @@ let uiModeSrc = readFile(UI_MODE_PATH);
 if (uiModeSrc.includes("UPDATE_AVAILABLE")) {
   console.log("SKIP ui-mode.ts — UPDATE_AVAILABLE already present");
 } else {
-  const ANCHOR = "SETTINGS_OFFLINE_PREFERENCES,";
-  requireAnchor(uiModeSrc, ANCHOR, "SETTINGS_OFFLINE_PREFERENCES in ui-mode.ts");
+  const ANCHOR = "ALERT_MODAL,";
+  requireAnchor(uiModeSrc, ANCHOR, "ALERT_MODAL in ui-mode.ts");
   uiModeSrc = uiModeSrc.replace(ANCHOR, `${ANCHOR}\n  UPDATE_AVAILABLE,`);
   writeFile(UI_MODE_PATH, uiModeSrc);
 }
@@ -128,39 +133,28 @@ let uiSrc = readFile(UI_PATH);
 if (uiSrc.includes("UpdateAvailableUiHandler")) {
   console.log("SKIP ui.ts — UpdateAvailableUiHandler already present");
 } else {
-  // Import line is inserted in alphabetical order (biome organizeImports),
-  // which is independent from the handlers array below - that array's
-  // order is NOT stylistic, it's a functional requirement (see next comment).
-  const IMPORT_ANCHOR = `import { OfflineSettingsUiHandler } from "#ui/offline-settings-ui-handler";`;
-  if (uiSrc.includes(IMPORT_ANCHOR)) {
-    uiSrc = uiSrc.replace(
-      IMPORT_ANCHOR,
-      `${IMPORT_ANCHOR}\nimport { UpdateAvailableUiHandler } from "#ui/update-available-ui-handler";`,
-    );
-  } else {
-    // Fall back to anchoring on the FightUiHandler import (present since before
-    // this fork's patches), inserting our import at the end of the import block
-    // instead of alphabetically - functionally equivalent, since import order
-    // doesn't matter at runtime.
-    const FALLBACK_IMPORT_ANCHOR = `import { FightUiHandler } from "#ui/fight-ui-handler";`;
-    requireAnchor(uiSrc, FALLBACK_IMPORT_ANCHOR, "FightUiHandler import in ui.ts");
-    uiSrc = uiSrc.replace(
-      FALLBACK_IMPORT_ANCHOR,
-      `${FALLBACK_IMPORT_ANCHOR}\nimport { UpdateAvailableUiHandler } from "#ui/update-available-ui-handler";`,
-    );
-  }
+  // Import order is stylistic (biome organizeImports) and doesn't matter at
+  // runtime, unlike the handlers array below - anchor on the same stable
+  // AlertModalUiHandler import app-settings-menu.js/gacha-calendar.js use.
+  const IMPORT_ANCHOR = `import { AlertModalUiHandler } from "#ui/alert-modal-ui-handler";`;
+  requireAnchor(uiSrc, IMPORT_ANCHOR, "AlertModalUiHandler import in ui.ts");
+  uiSrc = uiSrc.replace(
+    IMPORT_ANCHOR,
+    `${IMPORT_ANCHOR}\nimport { UpdateAvailableUiHandler } from "#ui/update-available-ui-handler";`,
+  );
 
   // Ui.getHandler() does `this.handlers[this.mode]` - the handlers array is
   // indexed positionally by UiMode's numeric enum value, NOT looked up by
-  // type. Since UPDATE_AVAILABLE is appended as the LAST UiMode entry, its
-  // handler instance MUST also be the last element of this array, matching
-  // enum order exactly - not alphabetical, not import order.
-  const HANDLER_ANCHOR = `new OfflinePreferencesUiHandler(),`;
-  requireAnchor(uiSrc, HANDLER_ANCHOR, "new OfflinePreferencesUiHandler() in ui.ts");
+  // type. UPDATE_AVAILABLE is inserted right after ALERT_MODAL in the enum
+  // (sub-patch 1), so its handler instance MUST also be inserted right after
+  // AlertModalUiHandler here, to stay at the matching position - not
+  // alphabetical, not import order, not "end of array".
+  const HANDLER_ANCHOR = `new AlertModalUiHandler(),`;
+  requireAnchor(uiSrc, HANDLER_ANCHOR, "new AlertModalUiHandler() in ui.ts");
   uiSrc = uiSrc.replace(HANDLER_ANCHOR, `${HANDLER_ANCHOR}\n      new UpdateAvailableUiHandler(),`);
 
-  const NO_TRANSITION_ANCHOR = `UiMode.SETTINGS_OFFLINE_PREFERENCES,`;
-  requireAnchor(uiSrc, NO_TRANSITION_ANCHOR, "UiMode.SETTINGS_OFFLINE_PREFERENCES in noTransitionModes");
+  const NO_TRANSITION_ANCHOR = `UiMode.ALERT_MODAL,`;
+  requireAnchor(uiSrc, NO_TRANSITION_ANCHOR, "UiMode.ALERT_MODAL in noTransitionModes");
   uiSrc = uiSrc.replace(NO_TRANSITION_ANCHOR, `${NO_TRANSITION_ANCHOR}\n  UiMode.UPDATE_AVAILABLE,`);
 
   writeFile(UI_PATH, uiSrc);
