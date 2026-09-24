@@ -48,7 +48,7 @@ const TARGET = path.join("pokerogue-src", "src", "ui", "handlers", "menu-ui-hand
 
 let src = readFile(TARGET);
 
-if (src.includes("appGithubUrl")) {
+if (src.includes("App GitHub")) {
   console.log("Community menu already patched, skipping.");
   process.exit(0);
 }
@@ -59,25 +59,16 @@ const ADMIN_IMPORT_ANCHOR = `import { AdminMode, getAdminModeName } from "#enums
 requireAnchor(src, ADMIN_IMPORT_ANCHOR, "AdminMode import in menu-ui-handler.ts");
 src = src.replace(ADMIN_IMPORT_ANCHOR, "");
 
-// ── Sub-patch 2: URL constants — add appGithubUrl, drop donateUrl ──────────
-
-const GITHUB_URL_ANCHOR = `const githubUrl = "https://github.com/pagefaultgames/pokerogue";\n`;
-requireAnchor(src, GITHUB_URL_ANCHOR, "githubUrl constant in menu-ui-handler.ts");
-src = src.replace(
-  GITHUB_URL_ANCHOR,
-  `${GITHUB_URL_ANCHOR}const appGithubUrl = "https://github.com/PokeRogue-Offline/pokerogue-offline";\n`,
-);
-
-const DONATE_URL_ANCHOR = `const donateUrl = "https://github.com/sponsors/pagefaultgames";\n`;
-requireAnchor(src, DONATE_URL_ANCHOR, "donateUrl constant in menu-ui-handler.ts");
-src = src.replace(DONATE_URL_ANCHOR, "");
-
-// ── Sub-patch 3: communityOptions — insert "App GitHub" after "GitHub" ─────
+// ── Sub-patch 2: communityOptions — insert "App GitHub" after "GitHub" ─────
+// Upstream now uses build-time VITE_GITHUB_URL/VITE_DONATE_URL constants
+// instead of local `githubUrl`/`donateUrl` consts, so there's nothing to add
+// or remove at the top of the file any more — the App GitHub URL is just
+// inlined directly in its own handler below.
 
 const GITHUB_ENTRY_ANCHOR = `      {
         label: "GitHub",
         handler: () => {
-          window.open(githubUrl, "_blank")?.focus();
+          window.open(VITE_GITHUB_URL, "_blank")?.focus();
           return true;
         },
         keepOpen: true,
@@ -89,41 +80,41 @@ src = src.replace(
       {
         label: "App GitHub",
         handler: () => {
-          window.open(appGithubUrl, "_blank")?.focus();
+          window.open("https://github.com/PokeRogue-Offline/pokerogue-offline", "_blank")?.focus();
           return true;
         },
         keepOpen: true,
       },`,
 );
 
-// ── Sub-patch 4: communityOptions — remove "Donate" entry ──────────────────
+// ── Sub-patch 3: communityOptions — remove "Donate" entry ──────────────────
 
-const DONATE_ENTRY_ANCHOR = `
-      {
+const DONATE_ENTRY_ANCHOR = `      {
         label: i18next.t("menuUiHandler:donate"),
         handler: () => {
-          window.open(donateUrl, "_blank")?.focus();
+          window.open(VITE_DONATE_URL, "_blank")?.focus();
           return true;
         },
         keepOpen: true,
       },`;
 requireAnchor(src, DONATE_ENTRY_ANCHOR, "Donate entry in communityOptions");
-src = src.replace(DONATE_ENTRY_ANCHOR, "");
+src = src.replace(`\n${DONATE_ENTRY_ANCHOR}`, "");
 
-// ── Sub-patch 5: remove the whole conditional "Admin" push block ──────────
+// ── Sub-patch 4: remove the whole conditional "Admin" push block ──────────
 
 const ADMIN_BLOCK_ANCHOR = `    if (bypassLogin || loggedInUser?.hasAdminRole) {
       communityOptions.push({
         label: "Admin",
         handler: () => {
-          const skippedAdminModes: AdminMode[] = [AdminMode.ADMIN]; // this is here so that we can skip the menu populating enums that aren't meant for the menu, such as the AdminMode.ADMIN
+          // this is here so that we can skip the menu populating enums that aren't meant for the menu
+          const skippedAdminModes: AdminMode[] = [AdminMode.ADMIN];
           const options: OptionSelectItem[] = [];
           Object.values(AdminMode)
-            .filter(v => !Number.isNaN(Number(v)) && !skippedAdminModes.includes(v as AdminMode))
+            .filter(v => !skippedAdminModes.includes(v))
             .forEach(mode => {
               // this gets all the enums in a way we can use
               options.push({
-                label: getAdminModeName(mode as AdminMode),
+                label: getAdminModeName(mode),
                 handler: () => {
                   ui.playSelect();
                   ui.setOverlayMode(
@@ -141,8 +132,9 @@ const ADMIN_BLOCK_ANCHOR = `    if (bypassLogin || loggedInUser?.hasAdminRole) {
                         },
                       ],
                     },
+                    // mode is our AdminMode enum
                     mode,
-                  ); // mode is our AdminMode enum
+                  );
                   return true;
                 },
               });
@@ -154,10 +146,9 @@ const ADMIN_BLOCK_ANCHOR = `    if (bypassLogin || loggedInUser?.hasAdminRole) {
               return true;
             },
           });
-          globalScene.ui.setOverlayMode(UiMode.OPTION_SELECT, {
-            options,
-            delay: 0,
-          });
+          const yOffset = this.menuMessageBox.displayHeight + 1;
+          const optionSelectConfig: OptionSelectModeConfig = { options, yOffset };
+          globalScene.ui.setOverlayMode(UiMode.OPTION_SELECT, optionSelectConfig);
           return true;
         },
         keepOpen: true,

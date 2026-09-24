@@ -1,7 +1,6 @@
 import { globalScene } from "#app/global-scene";
 import { Button } from "#enums/buttons";
 import { TextStyle } from "#enums/text-style";
-import { UiMode } from "#enums/ui-mode";
 import type { ReleaseInfo } from "#system/offline/update-check-api";
 import { ScrollBar } from "#ui/containers/scroll-bar";
 import { addBBCodeTextObject, addTextObject } from "#ui/text";
@@ -49,10 +48,6 @@ export class UpdateAvailableUiHandler extends UiHandler {
 
   private scrollY = 0;
   private contentHeight = 0;
-
-  constructor() {
-    super(UiMode.UPDATE_AVAILABLE);
-  }
 
   setup(): void {
     const ui = this.getUi();

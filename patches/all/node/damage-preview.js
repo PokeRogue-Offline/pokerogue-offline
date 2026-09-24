@@ -282,7 +282,11 @@ if (enemyInfoSrc.includes("updateDamageRange")) {
     `  updateEffectiveness(effectiveness?: string) {\n` +
     `    this.currentEffectiveness = effectiveness;\n` +
     `\n` +
-    `    if (globalScene.typeHints === TypeHints.OFF || effectiveness === undefined || this.flyoutMenu.flyoutVisible) {\n` +
+    `    if (\n` +
+    `      settings.display.typeHintsMode === TypeHints.OFF\n` +
+    `      || effectiveness === undefined\n` +
+    `      || this.flyoutMenu.flyoutVisible\n` +
+    `    ) {\n` +
     `      this.effectivenessContainer.setVisible(false);\n` +
     `      return;\n` +
     `    }\n` +

@@ -3,7 +3,6 @@ import { speciesDataRegistry } from "#app/global-species-data-registry";
 import { getLegendaryGachaSpeciesForTimestamp } from "#data/egg";
 import { Button } from "#enums/buttons";
 import { TextStyle } from "#enums/text-style";
-import { UiMode } from "#enums/ui-mode";
 import { UiHandler } from "#ui/ui-handler";
 import { addTextObject } from "#ui/text";
 import { addWindow } from "#ui/ui-theme";
@@ -97,10 +96,6 @@ export class GachaCalendarUiHandler extends UiHandler {
 
   /** Index (0-based, into the visible day cells only) of the cursor */
   private dayCursor: number;
-
-  constructor() {
-    super(UiMode.GACHA_CALENDAR);
-  }
 
   setup(): void {
     const ui = this.getUi();

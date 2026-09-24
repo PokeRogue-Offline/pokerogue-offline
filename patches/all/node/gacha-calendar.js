@@ -162,50 +162,55 @@ if (menuSrc.includes("GACHA_CALENDAR")) {
 
   // 4b. Label rendering — special-case GACHA_CALENDAR to a hardcoded label
   //     instead of an i18next lookup (offline-client-only feature, same
-  //     reasoning as the "Offline" settings tab label).
-  const LABEL_ANCHOR = `this.menuOptions.map(o => \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[o])}\`)}\`).join("\\n"),`;
+  //     reasoning as the "Offline" settings tab label). Upstream now builds
+  //     the options array via a per-option .map() (returning {label, handler,
+  //     keepOpen}) instead of joining one big label string, so we special-case
+  //     the `label:` field of that map instead.
+  const LABEL_ANCHOR =
+    `      return {\n` +
+    `        label: \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
+    `        handler: () => this.optionSelected(option),\n` +
+    `        keepOpen: true,\n` +
+    `      };`;
   requireAnchor(menuSrc, LABEL_ANCHOR, "menuOptions label map in menu-ui-handler.ts");
   menuSrc = menuSrc.replace(
     LABEL_ANCHOR,
-    `this.menuOptions
-        .map(o =>
-          o === MenuOptions.GACHA_CALENDAR
-            ? "Gacha Calendar"
-            : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[o])}\`)}\`,
-        )
-        .join("\\n"),`,
+    `      return {\n` +
+      `        label:\n` +
+      `          option === MenuOptions.GACHA_CALENDAR\n` +
+      `            ? "Gacha Calendar"\n` +
+      `            : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
+      `        handler: () => this.optionSelected(option),\n` +
+      `        keepOpen: true,\n` +
+      `      };`,
   );
 
   // 4c. Switch-case — open the new screen, same pattern as EGG_GACHA.
-  const CASE_ANCHOR = `        case MenuOptions.EGG_GACHA:
-          ui.revertMode();
-          ui.setOverlayMode(UiMode.EGG_GACHA);
-          success = true;
-          break;`;
+  const CASE_ANCHOR = `      case MenuOptions.EGG_GACHA:
+        ui.revertMode();
+        ui.setOverlayMode(UiMode.EGG_GACHA);
+        success = true;
+        break;`;
   requireAnchor(menuSrc, CASE_ANCHOR, "MenuOptions.EGG_GACHA switch-case in menu-ui-handler.ts");
   menuSrc = menuSrc.replace(
     CASE_ANCHOR,
     `${CASE_ANCHOR}
-        case MenuOptions.GACHA_CALENDAR:
-          ui.revertMode();
-          ui.setOverlayMode(UiMode.GACHA_CALENDAR);
-          success = true;
-          break;`,
+      case MenuOptions.GACHA_CALENDAR:
+        ui.revertMode();
+        ui.setOverlayMode(UiMode.GACHA_CALENDAR);
+        success = true;
+        break;`,
   );
 
-  // 4d. Exclusion lists — hide it in the same contexts EGG_GACHA is hidden in.
-  const EXCLUSION_1_ANCHOR = `options: [MenuOptions.EGG_GACHA, MenuOptions.EGG_LIST],`;
-  requireAnchor(menuSrc, EXCLUSION_1_ANCHOR, "constructor excludedMenus in menu-ui-handler.ts");
+  // 4d. Exclusion list — hide it in the same contexts EGG_GACHA is hidden in.
+  // (Upstream now has a single excludedMenus entry covering EGG_GACHA/EGG_LIST;
+  // the separate title/command-screen exclusion list from earlier versions of
+  // this patch no longer exists.)
+  const EXCLUSION_ANCHOR = `options: [MenuOptions.EGG_GACHA, MenuOptions.EGG_LIST],`;
+  requireAnchor(menuSrc, EXCLUSION_ANCHOR, "constructor excludedMenus in menu-ui-handler.ts");
   menuSrc = menuSrc.replace(
-    EXCLUSION_1_ANCHOR,
+    EXCLUSION_ANCHOR,
     `options: [MenuOptions.EGG_GACHA, MenuOptions.EGG_LIST, MenuOptions.GACHA_CALENDAR],`,
-  );
-
-  const EXCLUSION_2_ANCHOR = `options: [MenuOptions.EGG_GACHA],`;
-  requireAnchor(menuSrc, EXCLUSION_2_ANCHOR, "render() excludedMenus in menu-ui-handler.ts");
-  menuSrc = menuSrc.replace(
-    EXCLUSION_2_ANCHOR,
-    `options: [MenuOptions.EGG_GACHA, MenuOptions.GACHA_CALENDAR],`,
   );
 
   writeFile(MENU_PATH, menuSrc);

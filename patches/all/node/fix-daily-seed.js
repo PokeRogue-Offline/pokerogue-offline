@@ -55,7 +55,7 @@ if (src.includes("fix-daily-seed")) {
 // ── Patch 1: intercept the Daily Run option handler ───────────────────────────
 // Replace the simple `this.initDailyRun()` call with a fetch-first flow.
 
-const HANDLER_PATTERN = /([\t ]*)options\.push\(\{\s*\n\s*label: i18next\.t\(\"menu:dailyRun\"\),\s*\n\s*handler: \(\) => \{\s*\n\s*this\.initDailyRun\(\);\s*\n\s*return true;\s*\n\s*\},\s*\n\s*\}\);/;
+const HANDLER_PATTERN = /([\t ]*)newGameOptions\.push\(\{\s*\n\s*label: i18next\.t\(\"menu:dailyRun\"\),\s*\n\s*handler: \(\) => \{\s*\n\s*this\.initDailyRun\(\);\s*\n\s*return true;\s*\n\s*\},\s*\n\s*\}\);/;
 
 const handlerMatch = src.match(HANDLER_PATTERN);
 if (!handlerMatch) {
@@ -66,7 +66,7 @@ if (!handlerMatch) {
 const h = handlerMatch[1]; // indentation of the opening brace
 const h2 = h + "  ";
 
-const HANDLER_REPLACEMENT = `${h}options.push({
+const HANDLER_REPLACEMENT = `${h}newGameOptions.push({
 ${h2}label: i18next.t("menu:dailyRun"),
 ${h2}handler: () => {
 ${h2}  // fix-daily-seed: fetch seed before showing save slot picker so we stay

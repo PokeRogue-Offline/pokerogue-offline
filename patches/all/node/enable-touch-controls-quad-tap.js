@@ -93,8 +93,12 @@ if (touchControlsSrc.includes("enableTouchControlsOnQuadrupleTap")) {
     `${IMPORT_ANCHOR}\nimport { isCapacitor } from "#system/offline/backup-provider";`,
   );
 
-  const ANCHOR = "/**\n * Check if the device has a touchscreen.";
-  requireAnchor(touchControlsSrc, ANCHOR, "hasTouchscreen doc comment in touch-controls.ts");
+  // hasTouchscreen used to be defined locally in this file (with a doc
+  // comment we anchored on); it's now imported from #utils/app-utils, so we
+  // anchor on isMobile() instead — a stable, unrelated function right below
+  // where preventDoubleTapZoom() ends.
+  const ANCHOR = "export function isMobile(): boolean {";
+  requireAnchor(touchControlsSrc, ANCHOR, "isMobile() function in touch-controls.ts");
 
   const INJECTION = `const QUADRUPLE_TAP_THRESHOLD_MILLIS = 500;
 const QUADRUPLE_TAP_COUNT = 4;
@@ -118,7 +122,7 @@ export function enableTouchControlsOnQuadrupleTap(): void {
   document.addEventListener(
     "touchstart",
     (event: TouchEvent) => {
-      if (!globalScene || globalScene.enableTouchControls || event.touches.length > 1) {
+      if (settings.general.enableTouchControls || event.touches.length > 1) {
         tapTimestamps = [];
         return;
       }
@@ -129,11 +133,7 @@ export function enableTouchControlsOnQuadrupleTap(): void {
 
       if (tapTimestamps.length >= QUADRUPLE_TAP_COUNT) {
         tapTimestamps = [];
-        // Literal setting key ("TOUCH_CONTROLS") used instead of importing SettingKeys
-        // from settings.ts, since settings.ts already imports hasTouchscreen from this
-        // file — importing back would create a two-file cycle. Must match
-        // SettingKeys.Touch_Controls in src/system/settings/settings.ts.
-        globalScene.gameData.saveSetting("TOUCH_CONTROLS", 0);
+        settings.update("general", "enableTouchControls", true);
       }
     },
     { capture: true, passive: true },
@@ -156,7 +156,7 @@ let mainSrc = readFile(MAIN_PATH);
 if (mainSrc.includes("enableTouchControlsOnQuadrupleTap")) {
   console.log("SKIP main.ts — enableTouchControlsOnQuadrupleTap already present");
 } else {
-  const IMPORT_ANCHOR = `import { preventDoubleTapZoom } from "#app/touch-controls";`;
+  const IMPORT_ANCHOR = `import { isMobile, preventDoubleTapZoom } from "#app/touch-controls";`;
   requireAnchor(mainSrc, IMPORT_ANCHOR, "preventDoubleTapZoom import in main.ts");
 
   const CALL_ANCHOR = "preventDoubleTapZoom();";
@@ -164,7 +164,7 @@ if (mainSrc.includes("enableTouchControlsOnQuadrupleTap")) {
 
   mainSrc = mainSrc.replace(
     IMPORT_ANCHOR,
-    `import { enableTouchControlsOnQuadrupleTap, preventDoubleTapZoom } from "#app/touch-controls";`,
+    `import { enableTouchControlsOnQuadrupleTap, isMobile, preventDoubleTapZoom } from "#app/touch-controls";`,
   );
   mainSrc = mainSrc.replace(CALL_ANCHOR, `${CALL_ANCHOR}\nenableTouchControlsOnQuadrupleTap();`);
 

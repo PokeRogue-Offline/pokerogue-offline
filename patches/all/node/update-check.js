@@ -110,16 +110,15 @@ requireAnchor(src, NEW_IMPORTS_ANCHOR, '\'import { version } from "#package.json
 src = src.replace(
   NEW_IMPORTS_ANCHOR,
   `${NEW_IMPORTS_ANCHOR}` +
-    `import { checkForUpdates } from "#system/offline/update-check-api";\n` +
-    `import { SettingKeys } from "#system/settings";\n`,
+    `import { checkForUpdates } from "#system/offline/update-check-api";\n`,
 );
 
 // ── Sub-patch 2b: title-ui-handler.ts — module-scope constants ─────────────
 
-const IMPORT_ANCHOR = `import i18next from "i18next";\n`;
+const IMPORT_ANCHOR = `import i18next, { type TOptions } from "i18next";\n`;
 
 if (!src.includes(IMPORT_ANCHOR)) {
-  console.error('ERROR: Could not find \'import i18next from "i18next";\' anchor in title-ui-handler.ts.');
+  console.error('ERROR: Could not find \'import i18next, { type TOptions } from "i18next";\' anchor in title-ui-handler.ts.');
   process.exit(1);
 }
 
@@ -135,7 +134,7 @@ const CONSTANTS_BLOCK =
   `let hasCheckedForUpdate = false;\n` +
   `\n` +
   `// update-check: mirrors the localStorage-read pattern used by\n` +
-  `// google-drive-backup.ts's includeCurrentRunEnabled() for the same reason -\n` +
+  `// backup-manager.ts's includeCurrentRunEnabled() for the same reason -\n` +
   `// this runs before any UiHandler has necessarily read the settings blob\n` +
   `// itself, so it reads the shared "settings" localStorage entry directly.\n` +
   `// Absent key (never visited the Offline settings tab) falls back to the\n` +
@@ -147,8 +146,8 @@ const CONSTANTS_BLOCK =
   `      return true;\n` +
   `    }\n` +
   `    const parsed = JSON.parse(raw);\n` +
-  `    const value = parsed?.[SettingKeys.Offline_Update_Pop_Ups];\n` +
-  `    return value === undefined ? true : value === 1;\n` +
+  `    const value = parsed?.offline?.updatePopUps;\n` +
+  `    return value === undefined ? true : value === true;\n` +
   `  } catch {\n` +
   `    return true;\n` +
   `  }\n` +
@@ -209,7 +208,7 @@ src = src.replace(FIELD_ANCHOR, `${FIELD_ANCHOR}\n  private updateAvailableHintT
 // ── Sub-patch 5: create the hint text object in setup(), add it to titleContainer ─
 
 const SETUP_ANCHOR =
-  `    this.appVersionText = addTextObject(logoX - 60, logoHeight + 4, "", TextStyle.MONEY, { fontSize: "54px" }) // formatting\n` +
+  `    this.appVersionText = addTextObject(logo.x - 60, logoHeight + 4, "", TextStyle.MONEY, { fontSize: "54px" }) // formatting\n` +
   `      .setOrigin();`;
 requireAnchor(src, SETUP_ANCHOR, "appVersionText creation in title-ui-handler.ts setup()");
 src = src.replace(
@@ -217,7 +216,7 @@ src = src.replace(
   `${SETUP_ANCHOR}\n\n` +
     `    // update-check: always shown once an update is found, independent of\n` +
     `    // the "Update Pop-Ups" setting (Offline settings tab).\n` +
-    `    this.updateAvailableHintText = addTextObject(logoX - 60, logoHeight + 14, "", TextStyle.SUMMARY_GREEN, {\n` +
+    `    this.updateAvailableHintText = addTextObject(logo.x - 60, logoHeight + 14, "", TextStyle.SUMMARY_GREEN, {\n` +
     `      fontSize: "54px",\n` +
     `    }).setOrigin();`,
 );

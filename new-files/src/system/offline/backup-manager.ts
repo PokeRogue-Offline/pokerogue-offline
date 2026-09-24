@@ -16,7 +16,6 @@ import type { BackupProvider, RememberedFingerprint } from "#system/offline/back
 import { AUTO_SYNC_MIN_INTERVAL_MS, isSafeToAutoUpload, SYNC_STATE_KEY_PATTERN } from "#system/offline/backup-provider";
 import { DropboxProvider } from "#system/offline/dropbox-backup";
 import { GoogleDriveProvider } from "#system/offline/google-drive-backup";
-import { SettingKeys } from "#system/settings";
 
 // Matches sessionData_<user>, sessionData1_<user> ... sessionData4_<user>.
 const SESSION_KEY_PATTERN = /^sessionData\d*_/;
@@ -169,7 +168,7 @@ function includeCurrentRunEnabled(): boolean {
       return false;
     }
     const parsed = JSON.parse(raw);
-    return parsed?.[SettingKeys.Offline_Include_Current_Run] === 1;
+    return parsed?.offline?.includeCurrentRun === true;
   } catch (err) {
     console.error("backup-manager: failed to read Include Current Run setting", err);
     return false;
