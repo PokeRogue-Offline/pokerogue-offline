@@ -2,59 +2,65 @@
 /**
  * Patch: app-settings-menu.js
  *
- * Adds an "Offline" tab to the REAL Settings screen (alongside
- * General/Display/Audio/Gamepad/Keyboard).
+ * Adds an "Offline" entry to the pause menu, opening a standalone mini
+ * settings screen with two sub-tabs: "Backup" (cloud backup/sync) and
+ * "Preferences" (daily-seed cache, Update Pop-Ups, Damage Range, Enemy HP%,
+ * Touch Button Opacity).
  *
- * v10 of this patch. Changes from v9 — REWRITTEN for upstream's settings-UI
- * rework:
- *   - Upstream replaced the old flat `SettingType`/`SettingKeys`/`Setting[]`
- *     model (src/system/settings/settings.ts, now deleted) with a typed,
- *     per-category model: `UserFacingSettings` (audio/display/gamepad/
- *     general interfaces in src/@types/settings.ts), row definitions in
- *     src/ui/settings/settings-ui-items.ts, and a `SettingsManager` class
- *     (src/system/settings/settings-manager.ts) with hand-written getters
- *     per category. This patch adds a 5th "offline" category end-to-end:
- *     type, defaults, manager getter/load, and UI row definitions.
- *   - Upstream also replaced src/ui/settings/navigation-menu.ts (parallel
- *     modes/labels arrays) with a `settingsTabs` array + `TabMenu` component
- *     directly on BaseSettingsUiHandler. Sub-patch 5 now appends to that
- *     array instead of editing navigation-menu.ts.
- *   - The new BaseSettingsUiHandler has NO concept of "activatable" action
- *     rows at all (Button.ACTION is a no-op in its processInput() switch) —
- *     the old code only had to WIDEN a pre-existing activateSetting() method
- *     from private to protected. That method doesn't exist any more, so
- *     sub-patch 7 now ADDS a minimal activateSetting() extension point
- *     (base implementation: no-op, so every other tab is unaffected) and
- *     wires it into the Button.ACTION case, in addition to the same
- *     private->protected visibility widening as before (settingLabels/
- *     optionValueLabels/optionCursors — still needed, same field names).
- *   - src/ui/settings/settings-ui-handler.ts (General tab) was renamed to
- *     general-settings-ui-handler.ts and already has its own show()
- *     override (for touch-controls orientation labels) — sub-patch 8 now
- *     injects the prewarm logic into that existing override instead of
- *     appending a new one.
- *   - "Touch Button Opacity"'s live-apply hook used to be a case in
- *     settings.ts's setSetting() switch (also deleted). Reactive setting
- *     side effects now live in battle-scene.ts's initSettingsEventListeners()
- *     (an eventBus "settings/update/success" listener) — sub-patch 6 now
- *     adds a case there instead, alongside upstream's own shopOverlayOpacity
- *     example right next to it.
+ * v11 of this patch. Changes from v10 — moved out of the real Settings
+ * screen's tab bar:
+ *   - v10 added "Offline" as a 6th tab alongside General/Display/Audio/
+ *     Gamepad/Keyboard, registered in BaseSettingsUiHandler's `settingsTabs`
+ *     array. Manual testing on a real build showed this breaks the tab bar:
+ *     `TabMenu` (src/ui/containers/tab-menu.ts) lays out labels in a
+ *     hardcoded-320px header with no wrapping/clipping/scroll support at
+ *     all — it was clearly tuned for exactly 5 short English labels, and a
+ *     6th tab collides with the R/F tab-cycle hint icons at the header's
+ *     right edge (or gets partly hidden behind them, depending on the tab).
+ *   - Fix: Offline is now reached via its OWN pause-menu entry (mirroring
+ *     gacha-calendar.js's existing MenuOptions/UiMode pattern exactly),
+ *     opening a small mini-Settings screen with its own 2-entry TabMenu
+ *     (see new-files/src/ui/settings/offline-tabs.ts) — completely
+ *     independent of the real 5-tab bar, so there's no overflow risk.
+ *   - BaseSettingsUiHandler's `settingsTabs` field used to be a hardcoded
+ *     array in the class body, shared by every subclass. It's now a
+ *     constructor parameter (default value = the same 5 real tabs, so
+ *     General/Display/Audio's existing `super(category, uiItems)` calls are
+ *     unaffected) — the two new Offline handlers pass their own small
+ *     2-entry array instead.
+ *   - The previous single OfflineSettingsUiHandler (16 rows) is split into
+ *     OfflineBackupUiHandler (8 rows: provider/connect/disconnect/backup/
+ *     restore/include-current-run/last-played/clear-data) and
+ *     OfflinePreferencesUiHandler (8 rows: force-daily-seed + the 3
+ *     read-only daily-seed info rows + Update Pop-Ups/Damage Range/Enemy
+ *     HP%/Touch Button Opacity) — roughly even split, mirroring how the
+ *     real Settings screen itself is split into multiple tabs rather than
+ *     one long list.
+ *   - The general-settings-ui-handler.ts "prewarm connection on open" sub-
+ *     patch from v10 is REMOVED — it prewarmed the backup connection state
+ *     when the (real) General settings tab opened, reasoning that Offline
+ *     was a sibling tab the player might switch to. That's no longer true
+ *     (Offline is a separate pause-menu screen now), and it was redundant
+ *     anyway: OfflineBackupUiHandler's own show() already does the same
+ *     silent tryRestoreSession() check on-demand.
+ *   - gacha-calendar.js's own pause-menu label-rendering patch (same
+ *     `label:` line in menu-ui-handler.ts's option-building `.map()`) is
+ *     updated separately to chain onto the ternary this patch introduces —
+ *     apply-patches.sh always runs this patch before gacha-calendar.js, so
+ *     by the time gacha-calendar.js's sub-patch runs, the line is no longer
+ *     in its pristine (single i18next-only) shape.
  *   - Sub-patches 1 (ui-mode.ts), 2 (backup-*.ts new files), 4 (ui.ts
- *     import/register/noTransitionModes), and 9 (ui-inputs.ts whitelist)
- *     are UNCHANGED from v9 — their anchors still match current upstream
- *     verbatim.
- *   - Every "Offline" row is now a properly typed, persisted setting
- *     (`settings.offline.<key>`) instead of a generic string-keyed row, so
- *     downstream patches that used to read `SettingKeys.Offline_X` via a
- *     raw localStorage parse (update-check.js's Update Pop-Ups check,
- *     damage-preview-settings.ts, backup-manager.ts's Include Current Run
- *     check) now read `parsed.offline.<camelCaseKey>` instead — see those
- *     files/patches for the corresponding updates.
+ *     import/register/noTransitionModes — now for two handlers/modes), and
+ *     the ui-inputs.ts whitelist (also two handlers now) keep the same
+ *     shape/anchors as v10, just duplicated for the two new UiModes.
  *
  * Sub-patches, applied in order:
  *
  *   1. src/enums/ui-mode.ts
- *        Append SETTINGS_OFFLINE (after ALERT_MODAL, the last entry).
+ *        Append SETTINGS_OFFLINE_BACKUP, SETTINGS_OFFLINE_PREFERENCES
+ *        (after ALERT_MODAL, the last entry). Both names must start with
+ *        "SETTINGS" — index.css shows the touch-controls F/R (prev/next
+ *        tab) buttons via `[data-ui-mode^="SETTINGS"]`.
  *
  *   2. src/system/offline/{backup-provider,backup-manager,
  *      google-drive-backup,dropbox-backup}.ts  (new files, plus paired tests)
@@ -65,21 +71,20 @@
  *        the UI (sub-patch 3) and the auto-sync patch
  *        (patches/all/node/auto-drive-sync.js) actually call.
  *
- *   3. src/ui/settings/offline-settings-ui-handler.ts  (new file)
- *        Extends BaseSettingsUiHandler (same base class as the real
- *        General/Display/Audio tabs), constructed as
- *        `super("offline", offlineSettingsUiItems)`.
+ *   3. src/ui/settings/offline-tabs.ts, offline-backup-ui-handler.ts,
+ *      offline-preferences-ui-handler.ts  (new files)
+ *        offline-tabs.ts exports the shared 2-entry OFFLINE_TABS array both
+ *        handlers pass as their `settingsTabs` constructor argument.
  *
  *   4. src/ui/ui.ts
- *        Import OfflineSettingsUiHandler, register at the position
- *        matching UiMode.SETTINGS_OFFLINE, add to noTransitionModes.
+ *        Import both handlers, register at the positions matching the two
+ *        new UiModes, add both to noTransitionModes.
  *
- *   5. src/ui/settings/base-settings-ui-handler.ts  →  settingsTabs
- *        Append { mode: UiMode.SETTINGS_OFFLINE, labelKey: "Offline" } —
- *        this is what actually makes it show up as a 6th tab. Hardcoded
- *        label, deliberately not routed through i18next (i18next.t() on a
- *        namespace-less key just echoes it back, which is fine here) —
- *        offline-client-only feature.
+ *   5. src/ui/settings/base-settings-ui-handler.ts  →  settingsTabs injectable
+ *        Turn the hardcoded `settingsTabs` field into a constructor
+ *        parameter (default: the same 5 real tabs) so a subclass can pass
+ *        its own small tab set instead of sharing the real Settings
+ *        screen's 5-tab bar.
  *
  *   6. src/@types/settings.ts, src/system/settings/default-settings.ts,
  *      src/system/settings/settings-manager.ts, src/ui/settings/settings-ui-items.ts,
@@ -88,40 +93,43 @@
  *        type (16 fields covering backup state, daily-seed cache display,
  *        the Update Pop-Ups/Damage Range/Enemy HP%/Touch Button Opacity
  *        toggles), its defaults, a manager getter + localStorage load/merge,
- *        the UI row definitions (offlineSettingsUiItems), and a live-apply
- *        case for Touch Button Opacity's CSS var.
+ *        the UI row definitions (split into offlineBackupUiItems /
+ *        offlinePreferencesUiItems), and a live-apply case for Touch Button
+ *        Opacity's CSS var.
  *
  *   7. src/ui/settings/base-settings-ui-handler.ts  →  widen + add hook
  *        Widen `settingLabels`, `optionValueLabels`, and `optionCursors`
  *        from private to protected (pure visibility changes — lets our
- *        subclass grey out / restyle rows and update displayed text after
+ *        subclasses grey out / restyle rows and update displayed text after
  *        an async action completes). ADD a new `activateSetting()`
  *        extension point (base: no-op) and wire it into the Button.ACTION
- *        case of processInput() — see the v10 changelog note above.
+ *        case of processInput() — upstream's rewritten settings UI has no
+ *        concept of action rows at all, every other tab's rows just cycle
+ *        values.
  *
- *   8. src/ui/settings/general-settings-ui-handler.ts
- *        Inject into the existing show() override a call that fires the
- *        active provider's tryRestoreSession() (via backup-manager.ts)
- *        fire-and-forget. Prewarms the connection state so that if/when the
- *        player tabs over to Offline, the row already reflects "Connected"
- *        instead of a "Checking connection…" flash — all handler instances
- *        exist from boot (Ui.setup() constructs and calls setup() on every
- *        registered handler up front), so updating the Offline tab's state
- *        from here is safe even though it isn't the active tab.
+ *   8. src/ui/handlers/menu-ui-handler.ts
+ *        Add MenuOptions.OFFLINE (next to GAME_SETTINGS), a label-map
+ *        special-case (hardcoded "Offline" — offline-client-only feature,
+ *        not in real locale files, same reasoning as "Gacha Calendar"), and
+ *        a switch-case opening UiMode.SETTINGS_OFFLINE_BACKUP (the landing
+ *        sub-tab) — same pattern as GAME_SETTINGS (no revertMode first, so
+ *        Cancel/Back returns to the pause menu). Not added to any exclusion
+ *        list — always available, same as Game Settings/Achievements/Stats.
  *
  *   9. src/ui-inputs.ts
- *        Import OfflineSettingsUiHandler and append it to the `whitelist`
- *        array in buttonCycleOption() — without this, Button.CYCLE_SHINY/
- *        CYCLE_FORM (the tab-switch keys) are silently dropped while the
- *        Offline tab is active.
+ *        Import both handlers and append them to the `whitelist` array in
+ *        buttonCycleOption() — without this, Button.CYCLE_SHINY/CYCLE_FORM
+ *        (the tab-switch keys) are silently dropped while an Offline screen
+ *        is active.
  *
  * NOTE ON TESTING: all sub-patches have been checked against a fresh clone
  * of pagefaultgames/pokerogue (beta branch) and the anchors are confirmed
  * present at the time this was written, and the resulting tree has been
- * confirmed to build (`pnpm build --mode app`). The new UI handler's runtime
- * behavior (reaching into optionValueLabels/settingLabels/optionCursors
- * after construction, the activateSetting override, the UiMode.CONFIRM
- * delay/message flow) has NOT been verified in an actual running build.
+ * confirmed to build (`pnpm build --mode app`). The new UI handlers' runtime
+ * behavior (the 2-tab mini-Settings screen's actual layout/navigation, the
+ * activateSetting override, the UiMode.CONFIRM delay/message flow) has NOT
+ * been verified in an actual running build — the tab-overflow issue that
+ * prompted this rewrite was only found by shipping v10 and manually testing.
  */
 
 const fs = require("fs");
@@ -160,21 +168,18 @@ function requireAnchor(src, anchor, label) {
 const NEW_FILES_DIR = path.join(__dirname, "..", "..", "..", "new-files");
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-patch 1: src/enums/ui-mode.ts  →  append SETTINGS_OFFLINE
+// Sub-patch 1: src/enums/ui-mode.ts  →  append the two new UiModes
 // ─────────────────────────────────────────────────────────────────────────────
 
 const UI_MODE_PATH = path.join("pokerogue-src", "src", "enums", "ui-mode.ts");
 let uiModeSrc = readFile(UI_MODE_PATH);
 
-if (uiModeSrc.includes("SETTINGS_OFFLINE")) {
-  console.log("SKIP ui-mode.ts — SETTINGS_OFFLINE already present");
+if (uiModeSrc.includes("SETTINGS_OFFLINE_BACKUP")) {
+  console.log("SKIP ui-mode.ts — SETTINGS_OFFLINE_BACKUP already present");
 } else {
   const ANCHOR = "ALERT_MODAL,";
   requireAnchor(uiModeSrc, ANCHOR, "ALERT_MODAL in ui-mode.ts");
-  // Must start with "SETTINGS" — index.css shows the touch-controls F/R
-  // (prev/next tab) buttons via `[data-ui-mode^="SETTINGS"]`, matched against
-  // this enum key's string name (ui.ts sets `dataset.uiMode = UiMode[mode]`).
-  uiModeSrc = uiModeSrc.replace(ANCHOR, `${ANCHOR}\n  SETTINGS_OFFLINE,`);
+  uiModeSrc = uiModeSrc.replace(ANCHOR, `${ANCHOR}\n  SETTINGS_OFFLINE_BACKUP,\n  SETTINGS_OFFLINE_PREFERENCES,`);
   writeFile(UI_MODE_PATH, uiModeSrc);
 }
 
@@ -210,19 +215,20 @@ for (const moduleName of BACKUP_MODULE_NAMES) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-patch 3: src/ui/settings/offline-settings-ui-handler.ts  (new file)
+// Sub-patch 3: src/ui/settings/{offline-tabs,offline-backup-ui-handler,
+//   offline-preferences-ui-handler}.ts  (new files)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HANDLER_PATH = path.join("pokerogue-src", "src", "ui", "settings", "offline-settings-ui-handler.ts");
+const OFFLINE_UI_FILE_NAMES = ["offline-tabs", "offline-backup-ui-handler", "offline-preferences-ui-handler"];
 
-if (fs.existsSync(HANDLER_PATH)) {
-  console.log("SKIP offline-settings-ui-handler.ts — already exists");
-} else {
-  const src = fs.readFileSync(
-    path.join(NEW_FILES_DIR, "src", "ui", "settings", "offline-settings-ui-handler.ts"),
-    "utf8",
-  );
-  writeFile(HANDLER_PATH, src);
+for (const fileName of OFFLINE_UI_FILE_NAMES) {
+  const filePath = path.join("pokerogue-src", "src", "ui", "settings", `${fileName}.ts`);
+  if (fs.existsSync(filePath)) {
+    console.log(`SKIP ${fileName}.ts — already exists`);
+  } else {
+    const src = fs.readFileSync(path.join(NEW_FILES_DIR, "src", "ui", "settings", `${fileName}.ts`), "utf8");
+    writeFile(filePath, src);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -232,44 +238,92 @@ if (fs.existsSync(HANDLER_PATH)) {
 const UI_PATH = path.join("pokerogue-src", "src", "ui", "ui.ts");
 let uiSrc = readFile(UI_PATH);
 
-if (uiSrc.includes("OfflineSettingsUiHandler")) {
-  console.log("SKIP ui.ts — OfflineSettingsUiHandler already present");
+if (uiSrc.includes("OfflineBackupUiHandler")) {
+  console.log("SKIP ui.ts — OfflineBackupUiHandler already present");
 } else {
   const IMPORT_ANCHOR = `import { AlertModalUiHandler } from "#ui/alert-modal-ui-handler";`;
   requireAnchor(uiSrc, IMPORT_ANCHOR, "AlertModalUiHandler import in ui.ts");
   uiSrc = uiSrc.replace(
     IMPORT_ANCHOR,
-    `${IMPORT_ANCHOR}\nimport { OfflineSettingsUiHandler } from "#ui/offline-settings-ui-handler";`,
+    `${IMPORT_ANCHOR}\n` +
+      `import { OfflineBackupUiHandler } from "#ui/offline-backup-ui-handler";\n` +
+      `import { OfflinePreferencesUiHandler } from "#ui/offline-preferences-ui-handler";`,
   );
 
   const HANDLER_ANCHOR = `new AlertModalUiHandler(),`;
   requireAnchor(uiSrc, HANDLER_ANCHOR, "new AlertModalUiHandler() in ui.ts");
-  uiSrc = uiSrc.replace(HANDLER_ANCHOR, `${HANDLER_ANCHOR}\n      new OfflineSettingsUiHandler(),`);
+  uiSrc = uiSrc.replace(
+    HANDLER_ANCHOR,
+    `${HANDLER_ANCHOR}\n      new OfflineBackupUiHandler(),\n      new OfflinePreferencesUiHandler(),`,
+  );
 
   const NO_TRANSITION_ANCHOR = `UiMode.ALERT_MODAL,`;
   requireAnchor(uiSrc, NO_TRANSITION_ANCHOR, "UiMode.ALERT_MODAL in noTransitionModes");
-  uiSrc = uiSrc.replace(NO_TRANSITION_ANCHOR, `${NO_TRANSITION_ANCHOR}\n  UiMode.SETTINGS_OFFLINE,`);
+  uiSrc = uiSrc.replace(
+    NO_TRANSITION_ANCHOR,
+    `${NO_TRANSITION_ANCHOR}\n  UiMode.SETTINGS_OFFLINE_BACKUP,\n  UiMode.SETTINGS_OFFLINE_PREFERENCES,`,
+  );
 
   writeFile(UI_PATH, uiSrc);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sub-patch 5+7: src/ui/settings/base-settings-ui-handler.ts
-//   → register the 6th tab, widen 3 fields to protected, add activateSetting()
+//   → settingsTabs injectable, widen 3 fields to protected, add activateSetting()
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BASE_HANDLER_PATH = path.join("pokerogue-src", "src", "ui", "settings", "base-settings-ui-handler.ts");
 let baseHandlerSrc = readFile(BASE_HANDLER_PATH);
 
-if (baseHandlerSrc.includes("UiMode.SETTINGS_OFFLINE")) {
-  console.log("SKIP base-settings-ui-handler.ts — Offline tab already registered");
+if (baseHandlerSrc.includes("protected activateSetting")) {
+  console.log("SKIP base-settings-ui-handler.ts — already patched");
 } else {
-  // 5. Register the tab.
-  const TABS_ANCHOR = `{ mode: UiMode.SETTINGS_KEYBOARD, labelKey: "settings:keyboard" },\n  ];`;
-  requireAnchor(baseHandlerSrc, TABS_ANCHOR, "settingsTabs array in base-settings-ui-handler.ts");
+  // 5a. Field: drop the hardcoded array, keep just the type.
+  const TABS_FIELD_ANCHOR =
+    `  protected tabMenu: TabMenu;\n` +
+    `  protected readonly settingsTabs = [\n` +
+    `    { mode: UiMode.SETTINGS_GENERAL, labelKey: "settings:general" },\n` +
+    `    { mode: UiMode.SETTINGS_DISPLAY, labelKey: "settings:display" },\n` +
+    `    { mode: UiMode.SETTINGS_AUDIO, labelKey: "settings:audio" },\n` +
+    `    { mode: UiMode.SETTINGS_GAMEPAD, labelKey: "settings:gamepad" },\n` +
+    `    { mode: UiMode.SETTINGS_KEYBOARD, labelKey: "settings:keyboard" },\n` +
+    `  ];`;
+  requireAnchor(baseHandlerSrc, TABS_FIELD_ANCHOR, "settingsTabs field in base-settings-ui-handler.ts");
   baseHandlerSrc = baseHandlerSrc.replace(
-    TABS_ANCHOR,
-    `{ mode: UiMode.SETTINGS_KEYBOARD, labelKey: "settings:keyboard" },\n    { mode: UiMode.SETTINGS_OFFLINE, labelKey: "Offline" },\n  ];`,
+    TABS_FIELD_ANCHOR,
+    `  protected tabMenu: TabMenu;\n` + `  protected readonly settingsTabs: { mode: UiMode; labelKey: string }[];`,
+  );
+
+  // 5b. Constructor: accept settingsTabs as an optional 3rd param, defaulting
+  // to the same 5 real tabs (so every existing `super(category, uiItems)`
+  // call in General/Display/Audio's handlers is unaffected).
+  const CTOR_ANCHOR =
+    `  constructor(category: SettingsCategory, uiItems: SettingsUiItem[]) {\n` +
+    `    super();\n` +
+    `\n` +
+    `    this.category = category;\n` +
+    `\n` +
+    `    if (hasTouchscreen()) {`;
+  requireAnchor(baseHandlerSrc, CTOR_ANCHOR, "constructor in base-settings-ui-handler.ts");
+  baseHandlerSrc = baseHandlerSrc.replace(
+    CTOR_ANCHOR,
+    `  constructor(\n` +
+      `    category: SettingsCategory,\n` +
+      `    uiItems: SettingsUiItem[],\n` +
+      `    settingsTabs: { mode: UiMode; labelKey: string }[] = [\n` +
+      `      { mode: UiMode.SETTINGS_GENERAL, labelKey: "settings:general" },\n` +
+      `      { mode: UiMode.SETTINGS_DISPLAY, labelKey: "settings:display" },\n` +
+      `      { mode: UiMode.SETTINGS_AUDIO, labelKey: "settings:audio" },\n` +
+      `      { mode: UiMode.SETTINGS_GAMEPAD, labelKey: "settings:gamepad" },\n` +
+      `      { mode: UiMode.SETTINGS_KEYBOARD, labelKey: "settings:keyboard" },\n` +
+      `    ],\n` +
+      `  ) {\n` +
+      `    super();\n` +
+      `\n` +
+      `    this.category = category;\n` +
+      `    this.settingsTabs = settingsTabs;\n` +
+      `\n` +
+      `    if (hasTouchscreen()) {`,
   );
 
   // 7a. Widen settingLabels/optionValueLabels/optionCursors to protected.
@@ -303,10 +357,10 @@ if (baseHandlerSrc.includes("UiMode.SETTINGS_OFFLINE")) {
     SAVE_SETTING_ANCHOR,
     `  /**\n` +
       `   * app-settings-menu: extension point for settings tabs with "action" rows\n` +
-      `   * (e.g. the Offline tab's Connect/Backup/Restore buttons) that need to run\n` +
-      `   * custom logic on Button.ACTION rather than just cycling an option value.\n` +
-      `   * Base implementation is a no-op so every other tab's behavior (Button.ACTION\n` +
-      `   * does nothing) is unchanged.\n` +
+      `   * (e.g. the Offline screens' Connect/Backup/Restore buttons) that need to\n` +
+      `   * run custom logic on Button.ACTION rather than just cycling an option\n` +
+      `   * value. Base implementation is a no-op so every other tab's behavior\n` +
+      `   * (Button.ACTION does nothing) is unchanged.\n` +
       `   */\n` +
       `  protected activateSetting(_uiItem: SettingsUiItem): boolean {\n` +
       `    return false;\n` +
@@ -350,17 +404,14 @@ if (typesSrc.includes("OfflineSettings")) {
 
   const ANY_KEY_ANCHOR = `export type AnySettingKey = GeneralSettingsKey | DisplaySettingsKey | AudioSettingsKey | GamepadSettingsKey;`;
   requireAnchor(typesSrc, ANY_KEY_ANCHOR, "AnySettingKey type in @types/settings.ts");
-  typesSrc = typesSrc.replace(
-    ANY_KEY_ANCHOR,
-    `${ANY_KEY_ANCHOR.replace(";", "")} | OfflineSettingsKey;`,
-  );
+  typesSrc = typesSrc.replace(ANY_KEY_ANCHOR, `${ANY_KEY_ANCHOR.replace(";", "")} | OfflineSettingsKey;`);
 
   const LAST_LINE_ANCHOR = `export type GamepadSettingsKey = keyof GamepadSettings;`;
   requireAnchor(typesSrc, LAST_LINE_ANCHOR, "GamepadSettingsKey type (end of file) in @types/settings.ts");
   typesSrc = typesSrc.replace(
     LAST_LINE_ANCHOR,
     `${LAST_LINE_ANCHOR}\n\n` +
-      `/** Settings backing the offline client's "Offline" settings tab (app-settings-menu.js). */\n` +
+      `/** Settings backing the offline client's "Offline" pause-menu screen (app-settings-menu.js). */\n` +
       `export interface OfflineSettings {\n` +
       `  backupProvider: number;\n` +
       `  connectAccount: number;\n` +
@@ -522,8 +573,8 @@ if (managerSrc.includes("get offline()")) {
 const UI_ITEMS_PATH = path.join("pokerogue-src", "src", "ui", "settings", "settings-ui-items.ts");
 let uiItemsSrc = readFile(UI_ITEMS_PATH);
 
-if (uiItemsSrc.includes("offlineSettingsUiItems")) {
-  console.log("SKIP settings-ui-items.ts — offlineSettingsUiItems already present");
+if (uiItemsSrc.includes("offlineBackupUiItems")) {
+  console.log("SKIP settings-ui-items.ts — offlineBackupUiItems already present");
 } else {
   const IMPORT_ANCHOR = `  GeneralSettingsKey,\n  SettingsUiItem,`;
   requireAnchor(uiItemsSrc, IMPORT_ANCHOR, "type import block in settings-ui-items.ts");
@@ -534,10 +585,10 @@ if (uiItemsSrc.includes("offlineSettingsUiItems")) {
   uiItemsSrc = uiItemsSrc.replace(
     END_ANCHOR,
     `${END_ANCHOR}\n\n` +
-      `// #region Offline Settings\n` +
+      `// #region Offline Settings — Backup\n` +
       `\n` +
-      `/** UI items for the offline client's "Offline" settings tab (app-settings-menu.js) */\n` +
-      `export const offlineSettingsUiItems: SettingsUiItem<OfflineSettingsKey>[] = [\n` +
+      `/** UI items for the offline client's "Backup" screen (app-settings-menu.js) */\n` +
+      `export const offlineBackupUiItems: SettingsUiItem<OfflineSettingsKey>[] = [\n` +
       `  {\n` +
       `    key: "backupProvider",\n` +
       `    label: "Backup Provider",\n` +
@@ -581,6 +632,14 @@ if (uiItemsSrc.includes("offlineSettingsUiItems")) {
       `    label: "Clear All Data",\n` +
       `    options: [{ value: 0, label: "Clear" }],\n` +
       `  },\n` +
+      `];\n` +
+      `\n` +
+      `// #endregion Offline Settings — Backup\n` +
+      `\n` +
+      `// #region Offline Settings — Preferences\n` +
+      `\n` +
+      `/** UI items for the offline client's "Preferences" screen (app-settings-menu.js) */\n` +
+      `export const offlinePreferencesUiItems: SettingsUiItem<OfflineSettingsKey>[] = [\n` +
       `  {\n` +
       `    key: "forceDailySeed",\n` +
       `    label: "Force Daily Seed",\n` +
@@ -634,7 +693,7 @@ if (uiItemsSrc.includes("offlineSettingsUiItems")) {
       `  },\n` +
       `];\n` +
       `\n` +
-      `// #endregion Offline Settings`,
+      `// #endregion Offline Settings — Preferences`,
   );
 
   writeFile(UI_ITEMS_PATH, uiItemsSrc);
@@ -674,81 +733,91 @@ if (battleSceneSrc.includes("touchOverlayOpacity")) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-patch 8: src/ui/settings/general-settings-ui-handler.ts  →  prewarm connection on open
+// Sub-patch 8: src/ui/handlers/menu-ui-handler.ts  →  pause-menu entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-const GENERAL_TAB_PATH = path.join("pokerogue-src", "src", "ui", "settings", "general-settings-ui-handler.ts");
-let generalTabSrc = readFile(GENERAL_TAB_PATH);
+const MENU_PATH = path.join("pokerogue-src", "src", "ui", "handlers", "menu-ui-handler.ts");
+let menuSrc = readFile(MENU_PATH);
 
-if (generalTabSrc.includes("app-settings-menu: prewarm")) {
-  console.log("SKIP general-settings-ui-handler.ts — prewarm already present");
+if (menuSrc.includes("MenuOptions.OFFLINE")) {
+  console.log("SKIP menu-ui-handler.ts — MenuOptions.OFFLINE already present");
 } else {
-  const IMPORT_ANCHOR = `import { BaseSettingsUiHandler } from "#ui/base-settings-ui-handler";`;
-  requireAnchor(generalTabSrc, IMPORT_ANCHOR, "BaseSettingsUiHandler import in general-settings-ui-handler.ts");
-  generalTabSrc = generalTabSrc.replace(
-    IMPORT_ANCHOR,
-    `${IMPORT_ANCHOR}\nimport * as backupManager from "#system/offline/backup-manager";`,
+  // 8a. MenuOptions enum — insert right after GAME_SETTINGS.
+  const ENUM_ANCHOR = `enum MenuOptions {\n  GAME_SETTINGS,`;
+  requireAnchor(menuSrc, ENUM_ANCHOR, "GAME_SETTINGS in MenuOptions enum");
+  menuSrc = menuSrc.replace(ENUM_ANCHOR, `enum MenuOptions {\n  GAME_SETTINGS,\n  OFFLINE,`);
+
+  // 8b. Label rendering — special-case OFFLINE to a hardcoded label instead
+  // of an i18next lookup (offline-client-only feature, same reasoning as
+  // the "Gacha Calendar" menu entry). gacha-calendar.js's own label-map
+  // sub-patch is updated separately to chain onto this ternary, since
+  // apply-patches.sh always runs this patch first.
+  const LABEL_ANCHOR =
+    `      return {\n` +
+    `        label: \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
+    `        handler: () => this.optionSelected(option),\n` +
+    `        keepOpen: true,\n` +
+    `      };`;
+  requireAnchor(menuSrc, LABEL_ANCHOR, "menuOptions label map in menu-ui-handler.ts");
+  menuSrc = menuSrc.replace(
+    LABEL_ANCHOR,
+    `      return {\n` +
+      `        label:\n` +
+      `          option === MenuOptions.OFFLINE\n` +
+      `            ? "Offline"\n` +
+      `            : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
+      `        handler: () => this.optionSelected(option),\n` +
+      `        keepOpen: true,\n` +
+      `      };`,
   );
 
-  const SHOW_ANCHOR =
-    `  public override show(args: any[]): boolean {\n` +
-    `    const ret = super.show(args);\n` +
-    `\n` +
-    `    this.updateMoveTouchControlsSettingsLabel();\n` +
-    `\n` +
-    `    return ret;\n` +
-    `  }`;
-  requireAnchor(generalTabSrc, SHOW_ANCHOR, "show() override in general-settings-ui-handler.ts");
-  generalTabSrc = generalTabSrc.replace(
-    SHOW_ANCHOR,
-    `  public override show(args: any[]): boolean {\n` +
-      `    const ret = super.show(args);\n` +
-      `\n` +
-      `    // app-settings-menu: prewarm the active backup provider's connection\n` +
-      `    // state whenever the Settings screen is opened (General is always the\n` +
-      `    // entry tab), so the Offline tab's row already reflects the resolved\n` +
-      `    // state instead of a "Checking…" flash if/when the player tabs over to\n` +
-      `    // it. No-op if already signed in this session.\n` +
-      `    const provider = backupManager.getActiveProvider();\n` +
-      `    if (!provider.isAuthenticated()) {\n` +
-      `      provider.tryRestoreSession().catch(err => {\n` +
-      `        console.warn("Silent session restore failed:", err);\n` +
-      `      });\n` +
-      `    }\n` +
-      `\n` +
-      `    this.updateMoveTouchControlsSettingsLabel();\n` +
-      `\n` +
-      `    return ret;\n` +
-      `  }`,
+  // 8c. Switch-case — open the Backup sub-tab (the landing screen). Same
+  // pattern as GAME_SETTINGS (no revertMode first — Cancel/Back returns to
+  // the pause menu, not straight to gameplay).
+  const CASE_ANCHOR =
+    `      case MenuOptions.GAME_SETTINGS:\n` +
+    `        ui.setOverlayMode(UiMode.SETTINGS_GENERAL);\n` +
+    `        success = true;\n` +
+    `        break;`;
+  requireAnchor(menuSrc, CASE_ANCHOR, "MenuOptions.GAME_SETTINGS switch-case in menu-ui-handler.ts");
+  menuSrc = menuSrc.replace(
+    CASE_ANCHOR,
+    `${CASE_ANCHOR}\n` +
+      `      case MenuOptions.OFFLINE:\n` +
+      `        ui.setOverlayMode(UiMode.SETTINGS_OFFLINE_BACKUP);\n` +
+      `        success = true;\n` +
+      `        break;`,
   );
 
-  writeFile(GENERAL_TAB_PATH, generalTabSrc);
+  writeFile(MENU_PATH, menuSrc);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-patch 9: src/ui-inputs.ts  →  add OfflineSettingsUiHandler to the
+// Sub-patch 9: src/ui-inputs.ts  →  add both Offline handlers to the
 //   buttonCycleOption() whitelist, so Button.CYCLE_SHINY/CYCLE_FORM (the
-//   tab-switch keys) actually reach the Offline tab's processInput().
+//   tab-switch keys) actually reach their processInput().
 // ─────────────────────────────────────────────────────────────────────────────
 
 const UI_INPUTS_PATH = path.join("pokerogue-src", "src", "ui-inputs.ts");
 let uiInputsSrc = readFile(UI_INPUTS_PATH);
 
-if (uiInputsSrc.includes("OfflineSettingsUiHandler")) {
-  console.log("SKIP ui-inputs.ts — OfflineSettingsUiHandler already present");
+if (uiInputsSrc.includes("OfflineBackupUiHandler")) {
+  console.log("SKIP ui-inputs.ts — OfflineBackupUiHandler already present");
 } else {
   const IMPORT_ANCHOR = `import { SettingsKeyboardUiHandler } from "#ui/keyboard-settings-ui-handler";`;
   requireAnchor(uiInputsSrc, IMPORT_ANCHOR, "SettingsKeyboardUiHandler import in ui-inputs.ts");
   uiInputsSrc = uiInputsSrc.replace(
     IMPORT_ANCHOR,
-    `${IMPORT_ANCHOR}\nimport { OfflineSettingsUiHandler } from "#ui/offline-settings-ui-handler";`,
+    `${IMPORT_ANCHOR}\n` +
+      `import { OfflineBackupUiHandler } from "#ui/offline-backup-ui-handler";\n` +
+      `import { OfflinePreferencesUiHandler } from "#ui/offline-preferences-ui-handler";`,
   );
 
   const WHITELIST_ANCHOR = `SettingsKeyboardUiHandler,\n    ];`;
   requireAnchor(uiInputsSrc, WHITELIST_ANCHOR, "whitelist array in buttonCycleOption() in ui-inputs.ts");
   uiInputsSrc = uiInputsSrc.replace(
     WHITELIST_ANCHOR,
-    `SettingsKeyboardUiHandler,\n      OfflineSettingsUiHandler,\n    ];`,
+    `SettingsKeyboardUiHandler,\n      OfflineBackupUiHandler,\n      OfflinePreferencesUiHandler,\n    ];`,
   );
 
   writeFile(UI_INPUTS_PATH, uiInputsSrc);

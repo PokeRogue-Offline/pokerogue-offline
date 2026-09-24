@@ -162,24 +162,33 @@ if (menuSrc.includes("GACHA_CALENDAR")) {
 
   // 4b. Label rendering — special-case GACHA_CALENDAR to a hardcoded label
   //     instead of an i18next lookup (offline-client-only feature, same
-  //     reasoning as the "Offline" settings tab label). Upstream now builds
+  //     reasoning as the "Offline" pause-menu entry label). Upstream builds
   //     the options array via a per-option .map() (returning {label, handler,
   //     keepOpen}) instead of joining one big label string, so we special-case
-  //     the `label:` field of that map instead.
+  //     the `label:` field of that map instead. Chains onto the ternary
+  //     app-settings-menu.js's own menu-ui-handler.ts sub-patch already
+  //     introduces for MenuOptions.OFFLINE — apply-patches.sh always runs
+  //     that patch before this one, so the line is never in its pristine
+  //     (single i18next-only) shape by the time this runs.
   const LABEL_ANCHOR =
     `      return {\n` +
-    `        label: \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
+    `        label:\n` +
+    `          option === MenuOptions.OFFLINE\n` +
+    `            ? "Offline"\n` +
+    `            : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
     `        handler: () => this.optionSelected(option),\n` +
     `        keepOpen: true,\n` +
     `      };`;
-  requireAnchor(menuSrc, LABEL_ANCHOR, "menuOptions label map in menu-ui-handler.ts");
+  requireAnchor(menuSrc, LABEL_ANCHOR, "menuOptions label map in menu-ui-handler.ts (post app-settings-menu.js)");
   menuSrc = menuSrc.replace(
     LABEL_ANCHOR,
     `      return {\n` +
       `        label:\n` +
-      `          option === MenuOptions.GACHA_CALENDAR\n` +
-      `            ? "Gacha Calendar"\n` +
-      `            : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
+      `          option === MenuOptions.OFFLINE\n` +
+      `            ? "Offline"\n` +
+      `            : option === MenuOptions.GACHA_CALENDAR\n` +
+      `              ? "Gacha Calendar"\n` +
+      `              : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
       `        handler: () => this.optionSelected(option),\n` +
       `        keepOpen: true,\n` +
       `      };`,

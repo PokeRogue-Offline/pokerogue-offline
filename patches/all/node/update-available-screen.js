@@ -4,14 +4,16 @@
  *
  * Registers the "Update Available" screen (paginated, scrollable changelog
  * viewer) as a new UiMode. This is the display half of the update-checker
- * feature; update-check.js (which must run before this, so SETTINGS_OFFLINE/
- * GACHA_CALENDAR already exist as the enum's/handlers array's last entries)
- * is what actually calls `globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases)`.
+ * feature; update-check.js (which must run before this, so
+ * SETTINGS_OFFLINE_BACKUP/SETTINGS_OFFLINE_PREFERENCES/GACHA_CALENDAR
+ * already exist as the enum's/handlers array's last entries) is what
+ * actually calls `globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases)`.
  *
  * Sub-patches, applied in order:
  *
  *   1. src/enums/ui-mode.ts
- *        Append UPDATE_AVAILABLE (after SETTINGS_OFFLINE, the last entry).
+ *        Append UPDATE_AVAILABLE (after SETTINGS_OFFLINE_PREFERENCES, the
+ *        last entry at the time this patch runs).
  *
  *   2. src/ui/utils/markdown-to-bbcode.ts  (new file, plus its test)
  *        Small markdown-subset -> BBCode converter used to render the
@@ -70,8 +72,8 @@ let uiModeSrc = readFile(UI_MODE_PATH);
 if (uiModeSrc.includes("UPDATE_AVAILABLE")) {
   console.log("SKIP ui-mode.ts — UPDATE_AVAILABLE already present");
 } else {
-  const ANCHOR = "SETTINGS_OFFLINE,";
-  requireAnchor(uiModeSrc, ANCHOR, "SETTINGS_OFFLINE in ui-mode.ts");
+  const ANCHOR = "SETTINGS_OFFLINE_PREFERENCES,";
+  requireAnchor(uiModeSrc, ANCHOR, "SETTINGS_OFFLINE_PREFERENCES in ui-mode.ts");
   uiModeSrc = uiModeSrc.replace(ANCHOR, `${ANCHOR}\n  UPDATE_AVAILABLE,`);
   writeFile(UI_MODE_PATH, uiModeSrc);
 }
@@ -153,12 +155,12 @@ if (uiSrc.includes("UpdateAvailableUiHandler")) {
   // type. Since UPDATE_AVAILABLE is appended as the LAST UiMode entry, its
   // handler instance MUST also be the last element of this array, matching
   // enum order exactly - not alphabetical, not import order.
-  const HANDLER_ANCHOR = `new OfflineSettingsUiHandler(),`;
-  requireAnchor(uiSrc, HANDLER_ANCHOR, "new OfflineSettingsUiHandler() in ui.ts");
+  const HANDLER_ANCHOR = `new OfflinePreferencesUiHandler(),`;
+  requireAnchor(uiSrc, HANDLER_ANCHOR, "new OfflinePreferencesUiHandler() in ui.ts");
   uiSrc = uiSrc.replace(HANDLER_ANCHOR, `${HANDLER_ANCHOR}\n      new UpdateAvailableUiHandler(),`);
 
-  const NO_TRANSITION_ANCHOR = `UiMode.SETTINGS_OFFLINE,`;
-  requireAnchor(uiSrc, NO_TRANSITION_ANCHOR, "UiMode.SETTINGS_OFFLINE in noTransitionModes");
+  const NO_TRANSITION_ANCHOR = `UiMode.SETTINGS_OFFLINE_PREFERENCES,`;
+  requireAnchor(uiSrc, NO_TRANSITION_ANCHOR, "UiMode.SETTINGS_OFFLINE_PREFERENCES in noTransitionModes");
   uiSrc = uiSrc.replace(NO_TRANSITION_ANCHOR, `${NO_TRANSITION_ANCHOR}\n  UiMode.UPDATE_AVAILABLE,`);
 
   writeFile(UI_PATH, uiSrc);
