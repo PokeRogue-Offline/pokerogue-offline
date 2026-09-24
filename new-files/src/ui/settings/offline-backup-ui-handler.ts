@@ -183,20 +183,17 @@ export class OfflineBackupUiHandler extends BaseSettingsUiHandler {
           `A backup was found on ${providerName} (last played ${lastPlayed}). Restore it now? This will overwrite your current local save.`,
           null,
           () => {
-            ui.setOverlayMode(
-              UiMode.CONFIRM,
-              () => {
+            ui.setOverlayMode(UiMode.CONFIRM, {
+              yesHandler: () => {
                 ui.revertMode();
                 this.showText("", 0);
                 this.performRestore(true);
               },
-              () => {
+              noHandler: () => {
                 ui.revertMode();
                 this.showText("", 0);
               },
-              false,
-              0,
-            );
+            });
           },
         );
       })
@@ -354,9 +351,8 @@ export class OfflineBackupUiHandler extends BaseSettingsUiHandler {
       `Disconnect from ${providerName}? You'll need to sign in again to sync.`,
       null,
       () => {
-        ui.setOverlayMode(
-          UiMode.CONFIRM,
-          () => {
+        ui.setOverlayMode(UiMode.CONFIRM, {
+          yesHandler: () => {
             ui.revertMode();
             this.showText("", 0);
             backupManager
@@ -370,13 +366,11 @@ export class OfflineBackupUiHandler extends BaseSettingsUiHandler {
                 this.showText("Disconnect failed. Check the console for details.", 0, () => this.showText("", 0), 1500);
               });
           },
-          () => {
+          noHandler: () => {
             ui.revertMode();
             this.showText("", 0);
           },
-          false,
-          0,
-        );
+        });
       },
     );
   }
@@ -455,20 +449,17 @@ export class OfflineBackupUiHandler extends BaseSettingsUiHandler {
       `This will overwrite your current save data with your ${providerName} backup. Continue?`,
       null,
       () => {
-        ui.setOverlayMode(
-          UiMode.CONFIRM,
-          () => {
+        ui.setOverlayMode(UiMode.CONFIRM, {
+          yesHandler: () => {
             ui.revertMode();
             this.showText("", 0);
             this.performRestore();
           },
-          () => {
+          noHandler: () => {
             ui.revertMode();
             this.showText("", 0);
           },
-          false,
-          0,
-        );
+        });
       },
     );
   }
@@ -506,23 +497,19 @@ export class OfflineBackupUiHandler extends BaseSettingsUiHandler {
       "This will ERASE ALL local data — save, settings, everything — and cannot be undone. Continue?",
       null,
       () => {
-        ui.setOverlayMode(
-          UiMode.CONFIRM,
-          () => {
+        ui.setOverlayMode(UiMode.CONFIRM, {
+          yesHandler: () => {
             ui.revertMode();
             this.showText("", 0);
             localStorage.clear();
             window.location.reload();
           },
-          () => {
+          noHandler: () => {
             ui.revertMode();
             this.showText("", 0);
           },
-          false,
-          0,
-          0,
-          3000, // 3-second delay before "Yes" responds to input, per the plan.
-        );
+          inputDelay: 3000, // 3-second delay before "Yes" responds to input, per the plan.
+        });
       },
     );
   }
