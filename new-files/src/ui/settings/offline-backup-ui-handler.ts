@@ -1,16 +1,20 @@
 import { globalScene } from "#app/global-scene";
 import { TextStyle } from "#enums/text-style";
 import { UiMode } from "#enums/ui-mode";
-import type { Setting } from "#system/settings";
-import { SettingKeys, SettingType } from "#system/settings";
-import { BaseSettingsUiHandler } from "#ui/base-settings-ui-handler";
-import { getTextColor } from "#ui/text";
+import type { OfflineSettingsKey, SettingsUiItem } from "#types/settings";
 import * as backupManager from "#system/offline/backup-manager";
+import { BaseSettingsUiHandler } from "#ui/base-settings-ui-handler";
+import { OFFLINE_TABS } from "#ui/offline-tabs";
+import { offlineBackupUiItems } from "#ui/settings-ui-items";
+import { getTextColor } from "#ui/text";
 
 /**
- * Scooom's "Offline" tab in the real Settings screen — sits alongside
- * General/Display/Audio/Gamepad/Keyboard, added via NavigationManager's
- * documented extension point (append to `modes`/`labels`).
+ * Scooom's "Backup" screen — the landing sub-tab opened from the pause
+ * menu's "Offline" entry (see patches/all/node/app-settings-menu.js's
+ * menu-ui-handler.ts sub-patch), sibling-tabbed with OfflinePreferencesUiHandler
+ * via the shared OFFLINE_TABS array (offline-tabs.ts). Was previously a 6th
+ * tab on the real Settings screen; moved out to its own screen because the
+ * shared TabMenu has no overflow handling for a 6th entry — see offline-tabs.ts.
  *
  * Rows, in display order (locked ones grouped together):
  *   - Backup Provider (always interactive — opens a scrollable picker over
@@ -42,44 +46,27 @@ import * as backupManager from "#system/offline/backup-manager";
  * to know about the toggle at all, since it just writes back whatever a
  * given backup actually contains.
  *
- * NOTE: This has not been exercised in a live Phaser build yet. The
- * `settingLabels`/`optionValueLabels`/`optionCursors`/`activateSetting`
- * visibility changes this depends on (private → protected in
- * base-settings-ui-handler.ts) are pure visibility widenings with no other
- * logic touched, but the actual runtime behavior of reaching into those
- * rows post-construction hasn't been confirmed on a real device/build.
+ * The "activatable" action rows (Backup Provider, Connect, Disconnect,
+ * Backup Save, Restore Backup, Clear All Data) rely on `activateSetting()`,
+ * a small extension point added to `base-settings-ui-handler.ts` (upstream's
+ * rewritten settings UI has no concept of action rows — every other tab's
+ * rows just cycle values).
+ *
+ * NOTE: This has not been exercised in a live Phaser build yet.
  */
-// Must stay in sync with patches/all/node/fix-daily-seed.js — that patch
-// owns the actual daily-run seed consumption, this handler only reads/writes
-// the same three localStorage keys to display and force-refresh the cache.
-const DAILY_SEED_URL = "https://pokerogue-offline.github.io/pokerogue-offline/daily-seed.txt";
-const DAILY_SEED_KEY = "daily_seed";
-const DAILY_SEED_DATE_KEY = "daily_seed_date";
-const DAILY_SEED_FETCHED_AT_KEY = "daily_seed_fetched_at";
-
-export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
+export class OfflineBackupUiHandler extends BaseSettingsUiHandler {
   /** Rows that get greyed out and made inert while the active provider isn't authenticated. */
-  private static readonly LOCKABLE_KEYS = [
-    SettingKeys.Offline_Backup_Save,
-    SettingKeys.Offline_Restore_Backup,
-    SettingKeys.Offline_Include_Current_Run,
-    SettingKeys.Offline_Disconnect,
-  ];
-
-  /**
-   * Rows that are always greyed out / inert, regardless of sign-in state —
-   * pure info rows for the daily seed cache, unrelated to backups.
-   */
-  private static readonly ALWAYS_LOCKED_KEYS = [
-    SettingKeys.Offline_Daily_Seed_Value,
-    SettingKeys.Offline_Daily_Seed_Fetched,
-    SettingKeys.Offline_Daily_Seed_Expires,
+  private static readonly LOCKABLE_KEYS: OfflineSettingsKey[] = [
+    "backupSave",
+    "restoreBackup",
+    "includeCurrentRun",
+    "disconnectAccount",
   ];
 
   /**
    * True after a restore has completed this screen-open — a second press on
    * "Restore Backup" reloads instead of restoring again. Deliberately reset
-   * every time the tab opens (see show()) rather than persisted, so
+   * every time the screen opens (see show()) rather than persisted, so
    * navigating away and back always starts from a clean, unambiguous state.
    */
   private restoreComplete = false;
@@ -92,21 +79,16 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
    */
   private connectInProgress = false;
 
-  /** True while a Force Daily Seed fetch is in flight — prevents a double-tap. */
-  private forceSeedInProgress = false;
-
-  constructor(mode: UiMode | null = null) {
-    super(SettingType.APP, mode);
-    this.title = "Offline";
-    this.localStorageKey = "settings";
+  constructor() {
+    super("offline", offlineBackupUiItems, OFFLINE_TABS);
   }
 
-  private rowIndex(key: string): number {
-    return this.settings.findIndex(s => s.key === key);
+  private rowIndex(key: OfflineSettingsKey): number {
+    return this.uiItems.findIndex(item => item.key === key);
   }
 
   /** Directly overwrites a single-option row's displayed value text. */
-  private setRowText(key: string, text: string): void {
+  private setRowText(key: OfflineSettingsKey, text: string): void {
     const idx = this.rowIndex(key);
     if (idx === -1) {
       return;
@@ -125,7 +107,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
    * goes back to SETTINGS_SELECTED rather than every option looking the
    * same.
    */
-  private setRowLocked(key: string, locked: boolean): void {
+  private setRowLocked(key: OfflineSettingsKey, locked: boolean): void {
     const idx = this.rowIndex(key);
     if (idx === -1) {
       return;
@@ -151,91 +133,23 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
 
   private applyLockedStyling(): void {
     const locked = !backupManager.getActiveProvider().isAuthenticated();
-    for (const key of OfflineSettingsUiHandler.LOCKABLE_KEYS) {
+    for (const key of OfflineBackupUiHandler.LOCKABLE_KEYS) {
       this.setRowLocked(key, locked);
     }
-    for (const key of OfflineSettingsUiHandler.ALWAYS_LOCKED_KEYS) {
-      this.setRowLocked(key, true);
-    }
-  }
-
-  /**
-   * Formats the (always non-negative) gap between `target` and `now` as a
-   * relative string, floored to 5-minute increments — e.g. "1h 45m ago",
-   * "in 3h", "just now". Sub-5-minute gaps collapse to "just now"/"in a
-   * moment" rather than showing "0m", since a 5-minute floor can't
-   * distinguish "2 minutes ago" from "right now" anyway.
-   */
-  private static formatRelative(target: Date, now: Date): string {
-    const diffMs = target.getTime() - now.getTime();
-    const past = diffMs <= 0;
-    const totalMinutesRaw = Math.floor(Math.abs(diffMs) / 60000);
-    const totalMinutes = totalMinutesRaw - (totalMinutesRaw % 5); // floor to nearest 5
-
-    if (totalMinutes < 5) {
-      return past ? "just now" : "in a moment";
-    }
-
-    const days = Math.floor(totalMinutes / 1440);
-    const hours = Math.floor((totalMinutes % 1440) / 60);
-    const mins = totalMinutes % 60;
-
-    let body: string;
-    if (days > 0) {
-      body = hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-    } else if (hours > 0) {
-      body = mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-    } else {
-      body = `${mins}m`;
-    }
-
-    return past ? `${body} ago` : `in ${body}`;
-  }
-
-  /**
-   * Reads the daily seed cache (written by fix-daily-seed.js, or by
-   * handleForceDailySeedPress below) and reflects it in three read-only
-   * rows: the seed value itself, when it was fetched, and when it expires.
-   * Expiry is the next UTC midnight after the cached date, since that's
-   * when fix-daily-seed.js's own date check invalidates the cache.
-   */
-  private refreshDailySeedInfo(): void {
-    const seed = localStorage.getItem(DAILY_SEED_KEY);
-    const cachedDate = localStorage.getItem(DAILY_SEED_DATE_KEY);
-    const fetchedAtRaw = localStorage.getItem(DAILY_SEED_FETCHED_AT_KEY);
-
-    this.setRowText(SettingKeys.Offline_Daily_Seed_Value, seed ?? "None");
-
-    if (!seed || !cachedDate) {
-      this.setRowText(SettingKeys.Offline_Daily_Seed_Fetched, "—");
-      this.setRowText(SettingKeys.Offline_Daily_Seed_Expires, "—");
-      return;
-    }
-
-    const now = new Date();
-
-    const expiry = new Date(`${cachedDate}T00:00:00.000Z`);
-    expiry.setUTCDate(expiry.getUTCDate() + 1);
-    this.setRowText(SettingKeys.Offline_Daily_Seed_Expires, OfflineSettingsUiHandler.formatRelative(expiry, now));
-
-    const fetchedAtMs = fetchedAtRaw ? Number(fetchedAtRaw) : Number.NaN;
-    this.setRowText(
-      SettingKeys.Offline_Daily_Seed_Fetched,
-      Number.isFinite(fetchedAtMs) ? OfflineSettingsUiHandler.formatRelative(new Date(fetchedAtMs), now) : "unknown",
-    );
   }
 
   /**
    * One-time-per-session prompt offered right after a successful sign-in
-   * (explicit Connect/provider-switch, or the silent tab-open reconnect): if
-   * a backup already exists on the active provider, ask whether to restore
-   * it now. This is the practical fix for a device that's never synced
-   * before (and so would otherwise just silently decline to auto-upload
-   * once it starts making progress) — it gives the player an easy, obvious
-   * way to catch up before ever reaching an auto-sync checkpoint. Still
-   * routes through the exact same manual restoreFromBackup() codepath as
-   * the "Restore Backup" button — loading remains a player decision, just
-   * offered rather than requiring the player to dig through Settings.
+   * (explicit Connect/provider-switch, or the silent screen-open reconnect):
+   * if a backup already exists on the active provider, ask whether to
+   * restore it now. This is the practical fix for a device that's never
+   * synced before (and so would otherwise just silently decline to
+   * auto-upload once it starts making progress) — it gives the player an
+   * easy, obvious way to catch up before ever reaching an auto-sync
+   * checkpoint. Still routes through the exact same manual
+   * restoreFromBackup() codepath as the "Restore Backup" button — loading
+   * remains a player decision, just offered rather than requiring the
+   * player to dig through Settings.
    *
    * No-ops (no dialog at all) if no backup exists — a first-time user
    * connecting for the first time should see nothing.
@@ -247,8 +161,8 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
    * `tryRestoreSession()` reconnect ask again. It's only cleared on a
    * genuinely new connection or an explicit disconnect, set at the very
    * start of the check (before any await) so the two trigger paths below
-   * (explicit Connect press, and the silent tryRestoreSession() on tab open)
-   * can't both slip past a stale guard if they resolve close together.
+   * (explicit Connect press, and the silent tryRestoreSession() on screen
+   * open) can't both slip past a stale guard if they resolve close together.
    */
   private offerRestorePromptIfNeeded(): void {
     if (backupManager.hasOfferedRestorePrompt()) {
@@ -269,20 +183,17 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
           `A backup was found on ${providerName} (last played ${lastPlayed}). Restore it now? This will overwrite your current local save.`,
           null,
           () => {
-            ui.setOverlayMode(
-              UiMode.CONFIRM,
-              () => {
+            ui.setOverlayMode(UiMode.CONFIRM, {
+              yesHandler: () => {
                 ui.revertMode();
                 this.showText("", 0);
                 this.performRestore(true);
               },
-              () => {
+              noHandler: () => {
                 ui.revertMode();
                 this.showText("", 0);
               },
-              false,
-              0,
-            );
+            });
           },
         );
       })
@@ -302,27 +213,27 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
 
   private refreshDisplay(): void {
     const provider = backupManager.getActiveProvider();
-    this.setRowText(SettingKeys.Offline_Backup_Provider, provider.displayName);
-    this.setRowText(SettingKeys.Offline_Google_Connect, provider.isAuthenticated() ? "Connected" : "Not Connected");
-    this.setRowText(SettingKeys.Offline_Backup_Save, provider.displayName);
+    this.setRowText("backupProvider", provider.displayName);
+    this.setRowText("connectAccount", provider.isAuthenticated() ? "Connected" : "Not Connected");
+    this.setRowText("backupSave", provider.displayName);
     this.applyLockedStyling();
   }
 
   /** Fetches and displays the active provider's backup's embedded save time — only meaningful once connected. */
   private refreshLastBackupPlayed(): void {
     if (!backupManager.getActiveProvider().isAuthenticated()) {
-      this.setRowText(SettingKeys.Offline_Drive_Last_Played, "—");
+      this.setRowText("lastBackupPlayed", "—");
       return;
     }
-    this.setRowText(SettingKeys.Offline_Drive_Last_Played, "Checking…");
+    this.setRowText("lastBackupPlayed", "Checking…");
     backupManager
       .getRemoteLastPlayed()
       .then(lastPlayed => {
-        this.setRowText(SettingKeys.Offline_Drive_Last_Played, lastPlayed ?? "No backup found");
+        this.setRowText("lastBackupPlayed", lastPlayed ?? "No backup found");
       })
       .catch(err => {
         console.error("Failed to fetch last-played time:", err);
-        this.setRowText(SettingKeys.Offline_Drive_Last_Played, "—");
+        this.setRowText("lastBackupPlayed", "—");
       });
   }
 
@@ -330,18 +241,17 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     const result = super.show(args);
 
     this.restoreComplete = false;
-    this.setRowText(SettingKeys.Offline_Restore_Backup, "Restore");
+    this.setRowText("restoreBackup", "Restore");
 
     this.refreshDisplay();
     this.refreshLastBackupPlayed();
-    this.refreshDailySeedInfo();
 
     // Attempt a silent reconnect on the active provider if we're not already
     // signed in this session. Fire-and-forget — show() itself stays
     // synchronous, the rows just update once this resolves.
     const provider = backupManager.getActiveProvider();
     if (!provider.isAuthenticated()) {
-      this.setRowText(SettingKeys.Offline_Google_Connect, "Checking connection…");
+      this.setRowText("connectAccount", "Checking connection…");
       provider
         .tryRestoreSession()
         .then(restored => {
@@ -361,37 +271,34 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
   }
 
   /**
-   * Overrides the base class's (now-protected) activateSetting to add our
-   * action rows, falling back to super for everything else (currently just
-   * the touch-controls config row). Note "Include Current Run" is NOT
-   * handled here — it's a normal cycling Setting, not activatable, so it
-   * never reaches this method at all.
+   * Overrides the base class's `activateSetting()` extension point to add
+   * our action rows, falling back to super for everything else (which is a
+   * no-op — currently no other offline row is activatable). Note "Include
+   * Current Run" is NOT handled here — it's a normal cycling Setting, not
+   * activatable, so it never reaches this method at all.
    */
-  protected override activateSetting(setting: Setting): boolean {
-    switch (setting.key) {
-      case SettingKeys.Offline_Backup_Provider:
+  protected override activateSetting(uiItem: SettingsUiItem<OfflineSettingsKey>): boolean {
+    switch (uiItem.key) {
+      case "backupProvider":
         this.handleProviderSelectPress();
         return true;
-      case SettingKeys.Offline_Google_Connect:
+      case "connectAccount":
         this.handleConnectPress();
         return true;
-      case SettingKeys.Offline_Disconnect:
+      case "disconnectAccount":
         this.handleDisconnectPress();
         return true;
-      case SettingKeys.Offline_Backup_Save:
+      case "backupSave":
         this.handleBackupPress();
         return true;
-      case SettingKeys.Offline_Restore_Backup:
+      case "restoreBackup":
         this.handleRestorePress();
         return true;
-      case SettingKeys.Offline_Clear_Data:
+      case "clearAllData":
         this.handleClearDataPress();
         return true;
-      case SettingKeys.Offline_Force_Daily_Seed:
-        this.handleForceDailySeedPress();
-        return true;
     }
-    return super.activateSetting(setting);
+    return super.activateSetting(uiItem);
   }
 
   /**
@@ -444,9 +351,8 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
       `Disconnect from ${providerName}? You'll need to sign in again to sync.`,
       null,
       () => {
-        ui.setOverlayMode(
-          UiMode.CONFIRM,
-          () => {
+        ui.setOverlayMode(UiMode.CONFIRM, {
+          yesHandler: () => {
             ui.revertMode();
             this.showText("", 0);
             backupManager
@@ -460,13 +366,11 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
                 this.showText("Disconnect failed. Check the console for details.", 0, () => this.showText("", 0), 1500);
               });
           },
-          () => {
+          noHandler: () => {
             ui.revertMode();
             this.showText("", 0);
           },
-          false,
-          0,
-        );
+        });
       },
     );
   }
@@ -481,7 +385,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
     // rejection can't be immediately re-tapped into spawning a second
     // sign-in prompt before the UI's had a chance to settle.
     const unlockAt = Date.now() + 1000;
-    this.setRowText(SettingKeys.Offline_Google_Connect, "Connecting…");
+    this.setRowText("connectAccount", "Connecting…");
     backupManager
       .authenticateActiveProvider()
       .then(() => {
@@ -511,17 +415,17 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
       return;
     }
     const providerName = backupManager.getActiveProvider().displayName;
-    this.setRowText(SettingKeys.Offline_Backup_Save, "Backing up…");
+    this.setRowText("backupSave", "Backing up…");
     backupManager
       .backupSave()
       .then(() => {
-        this.setRowText(SettingKeys.Offline_Backup_Save, providerName);
+        this.setRowText("backupSave", providerName);
         this.showText("Backup complete.", 0, () => this.showText("", 0), 1500);
         this.refreshLastBackupPlayed();
       })
       .catch(err => {
         console.error("Backup failed:", err);
-        this.setRowText(SettingKeys.Offline_Backup_Save, providerName);
+        this.setRowText("backupSave", providerName);
         this.showText("Backup failed. Check the console for details.", 0, () => this.showText("", 0), 1500);
       })
       .finally(() => {
@@ -545,20 +449,17 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
       `This will overwrite your current save data with your ${providerName} backup. Continue?`,
       null,
       () => {
-        ui.setOverlayMode(
-          UiMode.CONFIRM,
-          () => {
+        ui.setOverlayMode(UiMode.CONFIRM, {
+          yesHandler: () => {
             ui.revertMode();
             this.showText("", 0);
             this.performRestore();
           },
-          () => {
+          noHandler: () => {
             ui.revertMode();
             this.showText("", 0);
           },
-          false,
-          0,
-        );
+        });
       },
     );
   }
@@ -570,7 +471,7 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
    * explicit "yes" from the player, so there's nothing left to confirm.
    */
   private performRestore(reloadOnSuccess = false): void {
-    this.setRowText(SettingKeys.Offline_Restore_Backup, "Restoring…");
+    this.setRowText("restoreBackup", "Restoring…");
     backupManager
       .restoreFromBackup()
       .then(() => {
@@ -579,11 +480,11 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
           return;
         }
         this.restoreComplete = true;
-        this.setRowText(SettingKeys.Offline_Restore_Backup, "Press Confirm to reload");
+        this.setRowText("restoreBackup", "Press Confirm to reload");
       })
       .catch(err => {
         console.error("Restore failed:", err);
-        this.setRowText(SettingKeys.Offline_Restore_Backup, "Restore");
+        this.setRowText("restoreBackup", "Restore");
         this.showText("Restore failed. Check the console for details.", 0, () => this.showText("", 0), 1500);
       });
   }
@@ -596,65 +497,20 @@ export class OfflineSettingsUiHandler extends BaseSettingsUiHandler {
       "This will ERASE ALL local data — save, settings, everything — and cannot be undone. Continue?",
       null,
       () => {
-        ui.setOverlayMode(
-          UiMode.CONFIRM,
-          () => {
+        ui.setOverlayMode(UiMode.CONFIRM, {
+          yesHandler: () => {
             ui.revertMode();
             this.showText("", 0);
             localStorage.clear();
             window.location.reload();
           },
-          () => {
+          noHandler: () => {
             ui.revertMode();
             this.showText("", 0);
           },
-          false,
-          0,
-          0,
-          3000, // 3-second delay before "Yes" responds to input, per the plan.
-        );
+          inputDelay: 3000, // 3-second delay before "Yes" responds to input, per the plan.
+        });
       },
     );
-  }
-
-  /**
-   * Force-fetches the daily seed regardless of what's cached, overwriting
-   * daily_seed / daily_seed_date / daily_seed_fetched_at on success. Not
-   * gated behind sign-in — this has nothing to do with backups.
-   * Deliberately does NOT go through title-phase.ts's handler; this is a
-   * standalone refresh of the same cache that handler reads from.
-   */
-  private handleForceDailySeedPress(): void {
-    if (this.forceSeedInProgress) {
-      return;
-    }
-    this.forceSeedInProgress = true;
-    this.setRowText(SettingKeys.Offline_Force_Daily_Seed, "Updating…");
-
-    fetch(DAILY_SEED_URL)
-      .then(r => {
-        if (!r.ok) {
-          throw new Error(`HTTP ${r.status}`);
-        }
-        return r.text();
-      })
-      .then(fetchedSeed => {
-        const seed = fetchedSeed.trim();
-        const todayUtc = new Date().toISOString().slice(0, 10);
-        localStorage.setItem(DAILY_SEED_DATE_KEY, todayUtc);
-        localStorage.setItem(DAILY_SEED_KEY, seed);
-        localStorage.setItem(DAILY_SEED_FETCHED_AT_KEY, Date.now().toString());
-        this.refreshDailySeedInfo();
-        this.showText("Daily seed updated.", 0, () => this.showText("", 0), 1500);
-      })
-      .catch(err => {
-        console.error("Force daily seed fetch failed:", err);
-        this.showText("Could not fetch daily seed. Check the console for details.", 0, () => this.showText("", 0), 1500);
-      })
-      .finally(() => {
-        this.setRowText(SettingKeys.Offline_Force_Daily_Seed, "Update");
-        this.forceSeedInProgress = false;
-        globalScene.ui.playSelect();
-      });
   }
 }

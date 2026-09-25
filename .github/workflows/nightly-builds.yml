@@ -1,0 +1,99 @@
+# .github/workflows/nightly-builds.yml
+name: Nightly Builds
+
+on:
+  schedule:
+    - cron: '0 20 * * *'
+      timezone: "America/Chicago"
+  workflow_dispatch: {}
+
+permissions:
+  actions: read
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Create Release (dev run, beta branch)
+        id: trigger
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run create-release.yaml --repo ${{ github.repository }} --ref main \
+            -f dev=true \
+            -f branch=beta
+          echo "triggered_after=$TS" >> $GITHUB_OUTPUT
+
+      - name: Locate the triggered run
+        id: locate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          AFTER: ${{ steps.trigger.outputs.triggered_after }}
+        run: |
+          for i in $(seq 1 24); do
+            RUN_ID=$(gh api "repos/$REPO/actions/workflows/create-release.yaml/runs?per_page=5&created=>=${AFTER}" \
+              --jq '.workflow_runs | sort_by(.created_at) | .[0].id // empty')
+            [ -n "$RUN_ID" ] && { echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT; exit 0; }
+            echo "Waiting for run to appear... ($i/24)"; sleep 5
+          done
+          echo "ERROR: Timed out locating the triggered run."; exit 1
+
+      - name: Wait for it to finish
+        id: wait
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.locate.outputs.run_id }}
+        run: |
+          for i in $(seq 1 180); do  # up to 90 min
+            STATUS=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '.status')
+            if [ "$STATUS" = "completed" ]; then
+              CONCLUSION=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '.conclusion')
+              echo "conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
+              [ "$CONCLUSION" = "success" ] && exit 0 || { echo "Create Release run ended: $CONCLUSION"; exit 1; }
+            fi
+            sleep 30
+          done
+          echo "ERROR: Timed out waiting for Create Release run."; exit 1
+
+      - name: Pull its artifacts down
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.locate.outputs.run_id }}
+        run: |
+          mkdir -p nightly-artifacts
+          gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id' | while read -r ID; do
+            NAME=$(gh api "repos/$REPO/actions/artifacts/$ID" --jq '.name')
+            gh api "repos/$REPO/actions/artifacts/$ID/zip" > "nightly-artifacts/${NAME}.zip"
+            unzip -o "nightly-artifacts/${NAME}.zip" -d "nightly-artifacts/${NAME}"
+            rm "nightly-artifacts/${NAME}.zip"
+          done
+
+      - name: Re-upload as this run's artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-builds
+          path: nightly-artifacts/**
+          retention-days: 14
+
+  notify:
+    needs: nightly
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Send ntfy notification
+        env:
+          STATUS: ${{ needs.nightly.result }}
+        run: |
+          if [ "$STATUS" == "success" ]; then
+            exit 0  # quiet on success, same as your other workflows
+          fi
+          curl -H "Title: Nightly Build Failed ❌" \
+               -H "Tags: warning,skull" \
+               -H "Markdown: yes" \
+               -H "Click: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+               -d "The Nightly Builds wrapper failed (not the triggered beta build itself — check its own run for that). See the linked run for which step failed." \
+               ${{ secrets.NTFY_URL }}

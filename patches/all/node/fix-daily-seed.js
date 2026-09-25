@@ -55,7 +55,7 @@ if (src.includes("fix-daily-seed")) {
 // ── Patch 1: intercept the Daily Run option handler ───────────────────────────
 // Replace the simple `this.initDailyRun()` call with a fetch-first flow.
 
-const HANDLER_PATTERN = /([\t ]*)options\.push\(\{\s*\n\s*label: i18next\.t\(\"menu:dailyRun\"\),\s*\n\s*handler: \(\) => \{\s*\n\s*this\.initDailyRun\(\);\s*\n\s*return true;\s*\n\s*\},\s*\n\s*\}\);/;
+const HANDLER_PATTERN = /([\t ]*)newGameOptions\.push\(\{\s*\n\s*label: i18next\.t\(\"menu:dailyRun\"\),\s*\n\s*handler: \(\) => \{\s*\n\s*this\.initDailyRun\(\);\s*\n\s*return true;\s*\n\s*\},\s*\n\s*\}\);/;
 
 const handlerMatch = src.match(HANDLER_PATTERN);
 if (!handlerMatch) {
@@ -66,7 +66,7 @@ if (!handlerMatch) {
 const h = handlerMatch[1]; // indentation of the opening brace
 const h2 = h + "  ";
 
-const HANDLER_REPLACEMENT = `${h}options.push({
+const HANDLER_REPLACEMENT = `${h}newGameOptions.push({
 ${h2}label: i18next.t("menu:dailyRun"),
 ${h2}handler: () => {
 ${h2}  // fix-daily-seed: fetch seed before showing save slot picker so we stay
@@ -95,25 +95,22 @@ ${h2}        this.initDailyRun();
 ${h2}      })
 ${h2}      .catch(err => {
 ${h2}        globalScene.ui.showText("Could not reach the server. Play offline daily instead?", null, () => {
-${h2}          globalScene.ui.setOverlayMode(
-${h2}            UiMode.CONFIRM,
-${h2}            () => {
+${h2}          globalScene.ui.setOverlayMode(UiMode.CONFIRM, {
+${h2}            yesHandler: () => {
 ${h2}              // Yes: proceed
 ${h2}              globalScene.ui.revertMode();
 ${h2}              globalScene.ui.clearText();
 ${h2}              this.initDailyRun();
 ${h2}            },
-${h2}            () => {
+${h2}            noHandler: () => {
 ${h2}              // No: restart title screen cleanly
 ${h2}              globalScene.ui.revertMode();
 ${h2}              globalScene.ui.clearText();
 ${h2}              globalScene.phaseManager.toTitleScreen();
 ${h2}              super.end();
-${h2}              return true;
 ${h2}            },
-${h2}            false,
-${h2}            -98,
-${h2}          );
+${h2}            yOffset: -98,
+${h2}          });
 ${h2}        });
 ${h2}      });
 ${h2}  }

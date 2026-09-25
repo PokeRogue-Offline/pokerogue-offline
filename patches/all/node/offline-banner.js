@@ -41,7 +41,7 @@ if (src.includes("offline-banner")) {
 
 // ── Patch 1: add isApp to the app-constants import ───────────────────────────
 
-const IMPORT_PATTERN = /(import \{ isBeta, isDev)([ ,}])/;
+const IMPORT_PATTERN = /(isBeta, isDev)( \})/;
 const importMatch = src.match(IMPORT_PATTERN);
 
 if (!importMatch) {

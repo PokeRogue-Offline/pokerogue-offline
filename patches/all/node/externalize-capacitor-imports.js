@@ -91,7 +91,11 @@ requireAnchor(src, ROLLDOWN_OPTIONS_ANCHOR, "rolldownOptions block in vite.confi
 src = src.replace(
   ROLLDOWN_OPTIONS_ANCHOR,
   `      rolldownOptions: {\n` +
-    `        external: isCapacitorBuild ? undefined : CAPACITOR_ONLY_PACKAGES,\n` +
+    // Empty array (not undefined) for the capacitor-build case — the project's
+    // exactOptionalPropertyTypes: true rejects explicitly assigning undefined
+    // to rolldownOptions.external; an empty array is functionally identical
+    // (nothing externalized).
+    `        external: isCapacitorBuild ? [] : CAPACITOR_ONLY_PACKAGES,\n` +
     `        // TODO: Review if we even need this anymore in v8.0`,
 );
 
