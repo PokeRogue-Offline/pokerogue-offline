@@ -1,4 +1,3 @@
-# .github/workflows/nightly-builds.yml
 name: Nightly Builds
 
 on:
@@ -8,7 +7,8 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  actions: write
+  actions: write   # needed to trigger create-release.yaml
+  contents: write  # needed to publish the rolling "nightly" release
 
 jobs:
   nightly:
@@ -58,6 +58,11 @@ jobs:
           done
           echo "ERROR: Timed out waiting for Create Release run."; exit 1
 
+      # -----------------------------------------------------------------------
+      # Download each platform's artifact from the triggered run. Each artifact
+      # zip contains a single file, already named with the "-dev" suffix by
+      # create-release.yaml, so no renaming is needed here.
+      # -----------------------------------------------------------------------
       - name: Pull its artifacts down
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,28 +77,40 @@ jobs:
             rm "nightly-artifacts/${NAME}.zip"
           done
 
-      - name: Re-upload as this run's artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightly-builds
-          path: nightly-artifacts/**
-          retention-days: 14
+      # -----------------------------------------------------------------------
+      # Publish (or overwrite) a single rolling "nightly" release. No history
+      # is kept - the previous nightly's release and tag are deleted and a
+      # fresh one is created in their place every run.
+      # -----------------------------------------------------------------------
+      - name: Publish rolling nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view nightly --repo ${{ github.repository }} >/dev/null 2>&1; then
+            gh release delete nightly --repo ${{ github.repository }} --yes --cleanup-tag
+          fi
+
+          gh release create nightly --repo ${{ github.repository }} \
+            --prerelease \
+            --title "Nightly build (beta branch)" \
+            --notes "Automated nightly build from PokeRogue's \`beta\` branch. Overwritten every run - not a stable release, and not archived." \
+            nightly-artifacts/*/*
 
   notify:
     needs: nightly
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Send ntfy notification
+      - name: Send ntfy notification on failure
         env:
           STATUS: ${{ needs.nightly.result }}
         run: |
           if [ "$STATUS" == "success" ]; then
-            exit 0  # quiet on success, same as your other workflows
+            exit 0  # quiet on success - create-release.yaml's own notify job already covers that
           fi
           curl -H "Title: Nightly Build Failed ❌" \
                -H "Tags: warning,skull" \
                -H "Markdown: yes" \
                -H "Click: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-               -d "The Nightly Builds wrapper failed (not the triggered beta build itself — check its own run for that). See the linked run for which step failed." \
+               -d "The Nightly Builds wrapper failed (not the triggered beta build itself - check its own run for that). See the linked run for which step failed." \
                ${{ secrets.NTFY_URL }}
