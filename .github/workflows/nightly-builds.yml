@@ -75,6 +75,19 @@ jobs:
           done
 
       # -----------------------------------------------------------------------
+      # create-release.yaml names each dev-run artifact
+      # "PokeRogueOffline-<Platform>-v<VERSION>-<BUILD_NUMBER>", so the
+      # PokeRogue version can be recovered from any downloaded artifact's
+      # folder name without needing cross-workflow job outputs.
+      # -----------------------------------------------------------------------
+      - name: Extract PokeRogue version
+        id: version
+        run: |
+          VERSION=$(ls nightly-artifacts | grep -oP '(?<=-v)[0-9]+(\.[0-9]+)*(?=-[0-9]+$)' | head -n1)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Found version: $VERSION"
+
+      # -----------------------------------------------------------------------
       # Publish (or overwrite) a single rolling "nightly" release. No history
       # is kept - the previous nightly's release and tag are deleted and a
       # fresh one is created in their place every run.
@@ -90,7 +103,7 @@ jobs:
           gh release create nightly --repo ${{ github.repository }} \
             --prerelease \
             --title "Nightly build (beta branch)" \
-            --notes "Automated nightly build from PokeRogue's \`beta\` branch. Overwritten every run - not a stable release, and not archived." \
+            --notes "Automated nightly build from PokeRogue's \`beta\` branch (v${{ steps.version.outputs.version }}). Overwritten every run - not a stable release, and not archived." \
             nightly-artifacts/*/*
 
   notify:
