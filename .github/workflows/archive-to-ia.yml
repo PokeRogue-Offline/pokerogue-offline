@@ -1,0 +1,45 @@
+name: Archive to Internet Archive
+
+# Fires when a prerelease is promoted to the latest release (Scooom's manual
+# flow: create-release.yaml always publishes as a prerelease, changelog gets
+# filled in and cleaned up, then it's flipped to non-prerelease/latest in the
+# GitHub UI). Never fires for nightly-builds.yml's rolling "nightly" release,
+# since that's always recreated with --prerelease and never promoted.
+on:
+  release:
+    types: [released]
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.release.tag_name != 'nightly' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests internetarchive
+
+      - name: Upload release to Internet Archive
+        env:
+          IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
+          IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+        run: python3 scripts/archive-to-ia.py --event-path "$GITHUB_EVENT_PATH"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -H "Title: IA Archive Upload Failed ❌" \
+               -H "Tags: warning,skull" \
+               -H "Markdown: yes" \
+               -H "Click: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+               -d "Failed to archive ${{ github.event.release.tag_name }} to the Internet Archive." \
+               ${{ secrets.NTFY_URL }}
