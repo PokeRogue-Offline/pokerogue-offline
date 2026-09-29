@@ -19,7 +19,8 @@ jobs:
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run create-release.yaml --repo ${{ github.repository }} --ref main \
             -f dev=true \
-            -f branch=beta
+            -f branch=beta \
+            -f notify=false
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
       - name: Locate the triggered run
