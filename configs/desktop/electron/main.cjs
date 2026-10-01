@@ -153,11 +153,11 @@ function waitForAuthCode(port, expectedState) {
       const state = url.searchParams.get('state');
       const error = url.searchParams.get('error');
 
-      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
       if (code && state === expectedState) {
-        res.end('<html><body>Signed in — you can close this tab and return to PokeRogue Offline.</body></html>');
+        res.end('<html><head><meta charset="utf-8"></head><body>Signed in. You can close this tab and return to PokeRogue Offline.</body></html>');
       } else {
-        res.end('<html><body>Sign-in failed or was cancelled. You can close this tab.</body></html>');
+        res.end('<html><head><meta charset="utf-8"></head><body>Sign-in failed or was cancelled. You can close this tab.</body></html>');
       }
 
       server.close();
