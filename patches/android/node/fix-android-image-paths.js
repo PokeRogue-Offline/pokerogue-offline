@@ -48,6 +48,11 @@ if (src.includes("fix-android-image-paths")) {
 // ── loadImage ────────────────────────────────────────────────────────────────
 
 const LOAD_IMAGE_ORIGINAL = `  public loadImage(key: string, folder: string, filename = \`\${key}.png\`): this {
+    const eventReplacment = timedEventManager.getEventImageReplacement(key);
+    if (eventReplacment) {
+      folder = "events";
+      filename = \`\${eventReplacment}.png\`;
+    }
     this.load.image(key, getCachedUrl(\`images/\${folder}/\${filename}\`));
     if (folder.startsWith("ui")) {
       folder = folder.replace("ui", "ui/legacy");
@@ -57,6 +62,11 @@ const LOAD_IMAGE_ORIGINAL = `  public loadImage(key: string, folder: string, fil
   }`;
 
 const LOAD_IMAGE_REPLACEMENT = `  public loadImage(key: string, folder: string, filename = \`\${key}.png\`): this {
+    const eventReplacment = timedEventManager.getEventImageReplacement(key);
+    if (eventReplacment) {
+      folder = "events";
+      filename = \`\${eventReplacment}.png\`;
+    }
     // fix-android-image-paths: avoid double slash when folder is empty
     const imgPath = (f: string) => \`images/\${f ? \`\${f}/\` : ""}\${filename}\`;
     this.load.image(key, getCachedUrl(imgPath(folder)));
