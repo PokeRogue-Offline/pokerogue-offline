@@ -122,6 +122,15 @@
  *        (the tab-switch keys) are silently dropped while an Offline screen
  *        is active.
  *
+ * v12 — adds one new Preferences-tab toggle, "Aggressive Memory Saving"
+ *   (default on): backs prune-stale-pokemon-assets.js's cache-eviction
+ *   feature, giving players/maintainers an instant kill-switch if that
+ *   feature ever evicts something it shouldn't, without needing a new
+ *   build. Touches the same three sub-patch-6 files (OfflineSettings type,
+ *   defaults, offlinePreferencesUiItems) as the existing damageRange/
+ *   enemyHpPercent/touchOverlayOpacity rows, following the same pattern -
+ *   see prune-stale-pokemon-assets.js's header for the feature itself.
+ *
  * NOTE ON TESTING: all sub-patches have been checked against a fresh clone
  * of pagefaultgames/pokerogue (beta branch) and the anchors are confirmed
  * present at the time this was written, and the resulting tree has been
@@ -429,6 +438,7 @@ if (typesSrc.includes("OfflineSettings")) {
       `  damageRange: boolean;\n` +
       `  enemyHpPercent: boolean;\n` +
       `  touchOverlayOpacity: number;\n` +
+      `  aggressiveMemorySaving: boolean;\n` +
       `}\n\n` +
       `/** All keys for the offline settings */\n` +
       `export type OfflineSettingsKey = keyof OfflineSettings;`,
@@ -506,6 +516,7 @@ if (defaultsSrc.includes("defaultOfflineSettings")) {
       `  damageRange: false,\n` +
       `  enemyHpPercent: false,\n` +
       `  touchOverlayOpacity: 0.8, // matches the previous hardcoded idle opacity\n` +
+      `  aggressiveMemorySaving: true, // prune-stale-pokemon-assets.js kill-switch\n` +
       `};\n` +
       `\n` +
       `export const defaultSettings: UserFacingSettings = {\n` +
@@ -690,6 +701,15 @@ if (uiItemsSrc.includes("offlineBackupUiItems")) {
       `      label: \`\${(i + 1) * 10}\`,\n` +
       `    })),\n` +
       `    touchscreenOnly: true,\n` +
+      `  },\n` +
+      `  {\n` +
+      `    // Kill-switch for prune-stale-pokemon-assets.js's Pokemon sprite/cry\n` +
+      `    // cache eviction (freeing assets for species no longer on the field).\n` +
+      `    // On by default; flip off instantly if an evicted asset ever fails to\n` +
+      `    // reload correctly, no new build required.\n` +
+      `    key: "aggressiveMemorySaving",\n` +
+      `    label: "Aggressive Memory Saving",\n` +
+      `    options: useOnOffOptions(),\n` +
       `  },\n` +
       `];\n` +
       `\n` +

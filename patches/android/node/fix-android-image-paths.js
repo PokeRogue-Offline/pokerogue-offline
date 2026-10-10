@@ -24,6 +24,13 @@
  *   that inserts the folder segment only when folder is non-empty, matching
  *   the pattern already used by loadAtlas.
  *
+ * ORDERING NOTE: this patch is android-only and always runs after
+ * patches/mobile/node/skip-legacy-ui-duplicate-textures.js (apply-patches.sh
+ * always applies mobile before android), which adds a
+ * `settings.isLegacyTheme &&` guard in front of the `folder.startsWith("ui")`
+ * check in loadImage. The anchors below expect that guard to already be
+ * present. If that patch's shape of loadImage changes, resync here too.
+ *
  * Targets: pokerogue-src/src/scene-base.ts
  */
 
@@ -54,7 +61,10 @@ const LOAD_IMAGE_ORIGINAL = `  public loadImage(key: string, folder: string, fil
       filename = \`\${eventReplacment}.png\`;
     }
     this.load.image(key, getCachedUrl(\`images/\${folder}/\${filename}\`));
-    if (folder.startsWith("ui")) {
+    // Offline: skip the Legacy-theme duplicate unless the player has actually
+    // opted into Legacy theme (mobile only - see skip-legacy-ui-duplicate-
+    // textures.js header for the "switching themes needs a restart" tradeoff).
+    if (settings.isLegacyTheme && folder.startsWith("ui")) {
       folder = folder.replace("ui", "ui/legacy");
       this.load.image(\`\${key}_legacy\`, getCachedUrl(\`images/\${folder}/\${filename}\`));
     }
@@ -70,7 +80,10 @@ const LOAD_IMAGE_REPLACEMENT = `  public loadImage(key: string, folder: string, 
     // fix-android-image-paths: avoid double slash when folder is empty
     const imgPath = (f: string) => \`images/\${f ? \`\${f}/\` : ""}\${filename}\`;
     this.load.image(key, getCachedUrl(imgPath(folder)));
-    if (folder.startsWith("ui")) {
+    // Offline: skip the Legacy-theme duplicate unless the player has actually
+    // opted into Legacy theme (mobile only - see skip-legacy-ui-duplicate-
+    // textures.js header for the "switching themes needs a restart" tradeoff).
+    if (settings.isLegacyTheme && folder.startsWith("ui")) {
       folder = folder.replace("ui", "ui/legacy");
       this.load.image(\`\${key}_legacy\`, getCachedUrl(imgPath(folder)));
     }

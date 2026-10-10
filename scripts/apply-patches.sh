@@ -20,6 +20,7 @@ apply_patch "update-check.js"         all
 apply_patch "update-title-labels.js"  all
 
 apply_patch "app-settings-menu.js"            all
+apply_patch "prune-stale-pokemon-assets.js"   all
 apply_patch "touch-overlay-idle-opacity.js"   all
 apply_patch "damage-preview.js"               all
 apply_patch "auto-drive-sync.js"              all
@@ -36,6 +37,7 @@ if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
   # Targeted Patches
   apply_patch "native-save-io.js"            mobile
   apply_patch "background-audio-pause.js"    mobile
+  apply_patch "skip-legacy-ui-duplicate-textures.js" mobile
 fi
 
 # ── Android only ──────────────────────────────────────────────────────────────

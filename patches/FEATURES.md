@@ -81,6 +81,31 @@ first three — each documents its ordering requirement in its own header:
   `default-settings.ts`, etc.) — not a separate file, but a separate
   concern within that patch.
 
+## Memory usage (reduce forced reloads on mobile)
+
+Two independent fixes for unmanaged memory growth over a long play session
+(the game never reloads the tab between runs, so nothing else ever frees
+these). Investigated and found to have zero anchor overlap with any other
+patch at the time they were written:
+
+- `patches/all/node/prune-stale-pokemon-assets.js` — the core fix. Frees
+  Pokemon sprite textures/anims and cry audio buffers for species no longer
+  on the field, once per wave transition, using the upstream
+  `getActiveKeys()` helper (`battle-scene.ts`) that previously only backed
+  the egg-hatch screen's own cleanup. Gated by a kill-switch setting
+  (`settings.offline.aggressiveMemorySaving`, default on) added to
+  `app-settings-menu.js`'s Preferences tab — depends on that patch having
+  already run, same as `damage-preview.js`'s settings.
+- `patches/mobile/node/skip-legacy-ui-duplicate-textures.js` — unrelated,
+  smaller fix: stops unconditionally loading a duplicate `_legacy` copy of
+  every UI texture/spritesheet/atlas at boot unless the player has actually
+  opted into Legacy theme. Mobile-only (desktop has no memory pressure
+  problem here). Shares `src/scene-base.ts` with `fix-android-image-paths.js`
+  (see "Shared files" below) — always applied *before* it, since
+  `apply-patches.sh` runs `mobile` before `android`; `fix-android-image-
+  paths.js`'s anchors were resynced in the same change to expect this
+  patch's guard already in place.
+
 ## Touch controls
 
 Two independent behaviors, not the same feature despite both being
@@ -123,8 +148,17 @@ other), not improve it:
 - `src/main.ts`: `patches/all/node/enable-touch-controls-quad-tap.js` and
   `patches/mobile/node/background-audio-pause.js` — two independent
   startup listeners.
+- `src/battle-scene.ts`: `app-settings-menu.js` (Touch Button Opacity
+  live-apply listener) and `patches/all/node/prune-stale-pokemon-assets.js`
+  (sprite/cry tracking + eviction) — unrelated concerns, non-overlapping
+  anchors.
+- `src/scene-base.ts`: `patches/mobile/node/skip-legacy-ui-duplicate-
+  textures.js` and `patches/android/node/fix-android-image-paths.js` — see
+  "Memory usage" above for the ordering dependency between them (not
+  independent in this one case — the android patch's anchors were written
+  to expect the mobile patch's output).
 
 ## Everything else (single-file, single-feature patches)
 
-`fix-daily-seed.js`, `fix-android-image-paths.js` — no cross-file or
-cross-patch dependencies; self-contained.
+`fix-daily-seed.js` — no cross-file or cross-patch dependencies;
+self-contained.
