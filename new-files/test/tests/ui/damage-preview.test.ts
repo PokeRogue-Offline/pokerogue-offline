@@ -51,7 +51,11 @@ describe("UI - Damage Preview", () => {
 
       vi.spyOn(defender, "getMaxHp").mockReturnValue(150);
       defender.hp = 150;
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 54 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 54,
+      });
 
       // minRaw = floor(54 * 0.85) = 45 -> 30%, maxRaw = 54 -> 36%
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("30%-36%");
@@ -64,7 +68,11 @@ describe("UI - Damage Preview", () => {
 
       vi.spyOn(defender, "getMaxHp").mockReturnValue(150);
       defender.hp = 50;
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 100 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 100,
+      });
 
       // minRaw = floor(100 * 0.85) = 85 >= hp(50)
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("OHKO");
@@ -77,7 +85,11 @@ describe("UI - Damage Preview", () => {
 
       vi.spyOn(defender, "getMaxHp").mockReturnValue(150);
       defender.hp = 90;
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 60 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 60,
+      });
 
       // minRaw = floor(60 * 0.85) = 51; 51 < 90 (not 1HKO), 51*2 = 102 >= 90 (2HKO)
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("2HKO");
@@ -90,7 +102,11 @@ describe("UI - Damage Preview", () => {
 
       vi.spyOn(defender, "getMaxHp").mockReturnValue(500);
       defender.hp = 500;
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 60 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 60,
+      });
 
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("9%-12%");
     });
@@ -106,7 +122,11 @@ describe("UI - Damage Preview", () => {
       defender.hp = 200;
       defender.bossSegments = 2;
       defender.bossSegmentIndex = 1;
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 60 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 60,
+      });
 
       // minRaw = floor(60*0.85) = 51; neither 51 nor 60 reaches the 100 HP segment boundary
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("26%-30%");
@@ -121,7 +141,11 @@ describe("UI - Damage Preview", () => {
       defender.hp = 200;
       defender.bossSegments = 2;
       defender.bossSegmentIndex = 1;
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 110 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 110,
+      });
 
       // minRaw = floor(110*0.85) = 93 -> doesn't reach the 100 HP boundary, so hit 1's
       // worst case is proven not to break the shield -> a plain range, not "Breaks Shield".
@@ -137,7 +161,11 @@ describe("UI - Damage Preview", () => {
       defender.hp = 300;
       defender.bossSegments = 3;
       defender.bossSegmentIndex = 2;
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 500 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 500,
+      });
 
       // minRaw = floor(500*0.85) = 425, enough to bypass one extra segment (log2(325/100)=1 -> floor 1),
       // guaranteeing a break even on the worst roll - no KO label, even though the max
@@ -154,7 +182,11 @@ describe("UI - Damage Preview", () => {
       defender.hp = 100;
       defender.bossSegments = 2;
       defender.bossSegmentIndex = 0; // last, unshielded segment - no clamp applies
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 200 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 200,
+      });
 
       // minRaw = floor(200*0.85) = 170 >= hp(100)
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("OHKO");
@@ -214,7 +246,11 @@ describe("UI - Damage Preview", () => {
 
       vi.spyOn(defender, "getMaxHp").mockReturnValue(1000);
       defender.hp = 1000;
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 100 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 100,
+      });
 
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.SEISMIC_TOSS])).toBe("10%");
     });
@@ -227,7 +263,11 @@ describe("UI - Damage Preview", () => {
       vi.spyOn(defender, "getMaxHp").mockReturnValue(10);
       defender.hp = 10;
       // Wildly overkill on a single hit - if a KO label leaked through here, it would be wrong.
-      vi.spyOn(defender, "getAttackDamage").mockReturnValue({ cancelled: false, result: HitResult.EFFECTIVE, damage: 1000 });
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 1000,
+      });
 
       const text = computeDamageRangeText(attacker, defender, allMoves[MoveId.BULLET_SEED]);
       expect(text).toContain("×2-5 hits");
@@ -240,6 +280,111 @@ describe("UI - Damage Preview", () => {
       const defender = game.field.getEnemyPokemon();
 
       expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.GROWL])).toBeUndefined();
+    });
+  });
+
+  describe("computeDamageRangeText - Multi Lens", () => {
+    it("sums both hits of a 1-stack Multi Lens to score a guaranteed OHKO", async () => {
+      game.override.startingHeldItems([{ name: "MULTI_LENS", count: 1 }]);
+      await game.classicMode.startBattle(SpeciesId.MAGIKARP);
+      const attacker = game.field.getPlayerPokemon();
+      const defender = game.field.getEnemyPokemon();
+
+      vi.spyOn(defender, "getMaxHp").mockReturnValue(100);
+      defender.hp = 100;
+      vi.spyOn(defender, "getAttackDamage").mockImplementation(({ source }) => {
+        const isFirstHit = source.turnData.hitsLeft === source.turnData.hitCount;
+        // 1 stack: hit 1 is 0.75x, hit 2 is 0.25x (both off the same 120 base).
+        return { cancelled: false, result: HitResult.EFFECTIVE, damage: isFirstHit ? 90 : 30 };
+      });
+
+      // Before the fix, this fell into the plain single-hit path with the
+      // attacker's fresh (hitCount=0, hitsLeft=-1) turnData, which the real
+      // PokemonMultiHitModifier.applyDamageModifier misreads as "not hit 1"
+      // and quarters damage to 30 on its own - a plain ~25%-30% range
+      // instead of OHKO. minTotal = floor(90*0.85) + floor(30*0.85) = 101 >= hp(100).
+      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("OHKO");
+    });
+
+    it("sums all three hits of a 2-stack Multi Lens to score a guaranteed OHKO", async () => {
+      game.override.startingHeldItems([{ name: "MULTI_LENS", count: 2 }]);
+      await game.classicMode.startBattle(SpeciesId.MAGIKARP);
+      const attacker = game.field.getPlayerPokemon();
+      const defender = game.field.getEnemyPokemon();
+
+      vi.spyOn(defender, "getMaxHp").mockReturnValue(100);
+      defender.hp = 100;
+      vi.spyOn(defender, "getAttackDamage").mockImplementation(({ source }) => {
+        const isFirstHit = source.turnData.hitsLeft === source.turnData.hitCount;
+        // 2 stacks: hit 1 is 0.5x, hits 2 and 3 are each 0.25x (off a 120 base).
+        return { cancelled: false, result: HitResult.EFFECTIVE, damage: isFirstHit ? 60 : 30 };
+      });
+
+      // minTotal = floor(60*0.85) + 2*floor(30*0.85) = 51 + 25 + 25 = 101 >= hp(100).
+      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("OHKO");
+    });
+
+    it("does not apply Multi Lens to an innate multi-hit move", async () => {
+      game.override.startingHeldItems([{ name: "MULTI_LENS", count: 1 }]);
+      await game.classicMode.startBattle(SpeciesId.MAGIKARP);
+      const attacker = game.field.getPlayerPokemon();
+      const defender = game.field.getEnemyPokemon();
+
+      vi.spyOn(defender, "getMaxHp").mockReturnValue(10);
+      defender.hp = 10;
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 1000,
+      });
+
+      // Move.canBeMultiStrikeEnhanced() already excludes MultiHitAttr moves,
+      // so Multi Lens can't also apply here - still takes the existing
+      // RNG-hit-count branch, unaffected by this fix.
+      const text = computeDamageRangeText(attacker, defender, allMoves[MoveId.BULLET_SEED]);
+      expect(text).toContain("×2-5 hits");
+      expect(text).not.toContain("Guaranteed");
+    });
+
+    it("restores the attacker's turnData after computing a Multi Lens preview", async () => {
+      game.override.startingHeldItems([{ name: "MULTI_LENS", count: 1 }]);
+      await game.classicMode.startBattle(SpeciesId.MAGIKARP);
+      const attacker = game.field.getPlayerPokemon();
+      const defender = game.field.getEnemyPokemon();
+
+      vi.spyOn(defender, "getAttackDamage").mockReturnValue({
+        cancelled: false,
+        result: HitResult.EFFECTIVE,
+        damage: 50,
+      });
+
+      const { hitCount, hitsLeft } = attacker.turnData;
+      computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE]);
+      expect(attacker.turnData.hitCount).toBe(hitCount);
+      expect(attacker.turnData.hitsLeft).toBe(hitsLeft);
+    });
+
+    it("shows 'Breaks Shield' against a boss when only the second internal hit crosses the shield boundary", async () => {
+      game.override.startingHeldItems([{ name: "MULTI_LENS", count: 1 }]);
+      await game.classicMode.startBattle(SpeciesId.MAGIKARP);
+      const attacker = game.field.getPlayerPokemon();
+      const defender = game.field.getEnemyPokemon();
+
+      vi.spyOn(defender, "getMaxHp").mockReturnValue(200);
+      defender.hp = 200;
+      defender.bossSegments = 2;
+      defender.bossSegmentIndex = 1; // shield boundary at 100 HP
+      vi.spyOn(defender, "getAttackDamage").mockImplementation(({ source }) => {
+        const isFirstHit = source.turnData.hitsLeft === source.turnData.hitCount;
+        // Hit 1 (min roll 34) leaves the boss at 166 HP - still above the 100
+        // HP boundary, so it alone doesn't break the shield. Hit 2 (min roll
+        // 68) then pushes 166 down to 98, crossing the boundary. A version
+        // that only checked the first internal hit (or summed both hits
+        // before checking at all) would miss this.
+        return { cancelled: false, result: HitResult.EFFECTIVE, damage: isFirstHit ? 40 : 80 };
+      });
+
+      expect(computeDamageRangeText(attacker, defender, allMoves[MoveId.TACKLE])).toBe("Breaks Shield");
     });
   });
 

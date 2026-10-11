@@ -2,6 +2,7 @@ import { globalScene } from "#app/global-scene";
 import { MoveCategory } from "#enums/move-category";
 import { MultiHitType } from "#enums/multi-hit-type";
 import type { EnemyPokemon, Pokemon } from "#field/pokemon";
+import { PokemonMultiHitModifier } from "#modifiers/modifier";
 import type { Move } from "#moves/move";
 import { calculateBossSegmentDamage } from "#utils/damage";
 
@@ -73,54 +74,140 @@ function isClassicFinalBossPhaseOne(enemy: EnemyPokemon): boolean {
   return globalScene.currentBattle.isClassicFinalBoss && enemy.formIndex === 0 && enemy.bossSegmentIndex < 1;
 }
 
-function formatSingleHit(defender: EnemyPokemon, minRaw: number, maxRaw: number): string {
+interface BossHitChainResult {
+  /** HP remaining after the chain stops (0 if it ended in a KO). */
+  hpRemaining: number;
+  /** Index of the hit that KO'd the target, if any. */
+  koAtHit?: number;
+  /** Whether a hit in the chain broke a shield before the chain could finish. */
+  breaksShield?: true;
+}
+
+/**
+ * Chains an ordered sequence of raw-damage hits (e.g. the internal strikes of
+ * a single Multi-Lens-boosted move use) against a boss's current
+ * segment/shield, stopping as soon as a hit would KO or break a shield - a
+ * shield breaking mid-chain triggers an unpredictable (weighted-random) stat
+ * boost that invalidates predicting any later hit in the same chain.
+ */
+function chainBossHits(enemy: EnemyPokemon, hitsRaw: number[], startHp: number): BossHitChainResult {
+  const maxHp = enemy.getMaxHp();
+  const segmentSize = maxHp / enemy.bossSegments;
+  const minSegIdx = getMinimumSegmentIndex(enemy);
+  const segIdx = enemy.bossSegmentIndex;
+
+  let hp = startHp;
+  for (let i = 0; i < hitsRaw.length; i++) {
+    const finalBossCap = isClassicFinalBossPhaseOne(enemy) ? hp - 1 : hp;
+    const [adjustedRaw, cleared] = calculateBossSegmentDamage(hitsRaw[i], hp, segmentSize, minSegIdx, segIdx);
+    const adjusted = Math.min(adjustedRaw, finalBossCap);
+    const hpBeforeHit = hp;
+    hp = Math.max(hp - adjusted, 0);
+    if (adjusted >= hpBeforeHit) {
+      return { hpRemaining: 0, koAtHit: i };
+    }
+    if (cleared <= segIdx) {
+      return { hpRemaining: hp, breaksShield: true };
+    }
+  }
+  return { hpRemaining: hp };
+}
+
+/**
+ * Computes the damage-range / KO-label text for one move use that deals the
+ * given ordered min/max raw-damage hits (a single-element array for a normal
+ * single-hit move, or `[first, rest, rest, ...]` for a Multi-Lens-boosted
+ * move - see {@linkcode getRawDamagePerLensHit}).
+ */
+function formatMultiHit(defender: EnemyPokemon, minHits: number[], maxHits: number[]): string {
   const maxHp = defender.getMaxHp();
   const hp = defender.hp;
 
   if (!defender.isBoss()) {
-    if (minRaw >= hp) {
+    const minTotal = minHits.reduce((a, b) => a + b, 0);
+    const maxTotal = maxHits.reduce((a, b) => a + b, 0);
+    if (minTotal >= hp) {
       return "OHKO";
     }
-    if (minRaw * 2 >= hp) {
+    if (minTotal * 2 >= hp) {
       return "2HKO";
     }
-    return formatRange(Math.min(minRaw, hp), Math.min(maxRaw, hp), maxHp);
+    return formatRange(Math.min(minTotal, hp), Math.min(maxTotal, hp), maxHp);
   }
 
-  const enemy = defender;
-  const segmentSize = maxHp / enemy.bossSegments;
-  const minSegIdx = getMinimumSegmentIndex(enemy);
-  const segIdx = enemy.bossSegmentIndex;
-  const finalBossCap = isClassicFinalBossPhaseOne(enemy) ? hp - 1 : hp;
-
-  const [adjustedMinRaw, clearedMin] = calculateBossSegmentDamage(minRaw, hp, segmentSize, minSegIdx, segIdx);
-  const [adjustedMaxRaw] = calculateBossSegmentDamage(maxRaw, hp, segmentSize, minSegIdx, segIdx);
-  const adjustedMin = Math.min(adjustedMinRaw, finalBossCap);
-  const adjustedMax = Math.min(adjustedMaxRaw, finalBossCap);
-
-  if (adjustedMin >= hp) {
+  const firstUseMin = chainBossHits(defender, minHits, hp);
+  if (firstUseMin.koAtHit !== undefined) {
     return "OHKO";
   }
-
-  // Guaranteed (worst-roll) shield break: a weighted-random stat boost may
-  // follow, which can't be predicted without consuming real RNG - show that
-  // instead of a KO label, per design.
-  if (clearedMin <= segIdx) {
+  // Guaranteed (worst-roll) shield break on any hit of this move use: a
+  // weighted-random stat boost may follow, which can't be predicted without
+  // consuming real RNG - show that instead of a KO label, per design.
+  if (firstUseMin.breaksShield) {
     return "Breaks Shield";
   }
 
-  // Hit 1's minimum roll is guaranteed not to break a shield, so the
-  // defender's stats are provably unchanged going into hit 2 - safe to
-  // chain the same min-roll damage a second time.
-  const hpAfterHit1 = hp - adjustedMin;
-  const [adjustedMin2Raw] = calculateBossSegmentDamage(minRaw, hpAfterHit1, segmentSize, minSegIdx, segIdx);
-  const finalBossCap2 = isClassicFinalBossPhaseOne(enemy) ? hpAfterHit1 - 1 : hpAfterHit1;
-  const adjustedMin2 = Math.min(adjustedMin2Raw, finalBossCap2);
-  if (adjustedMin2 >= hpAfterHit1) {
+  const firstUseMax = chainBossHits(defender, maxHits, hp);
+  const minDealt = hp - firstUseMin.hpRemaining;
+  const maxDealt = hp - firstUseMax.hpRemaining;
+
+  // No shield broke on this move use's minimum roll, so the defender's stats
+  // are provably unchanged going into a second use next turn - safe to chain
+  // the same min-roll hits again.
+  const secondUse = chainBossHits(defender, minHits, firstUseMin.hpRemaining);
+  if (secondUse.koAtHit !== undefined) {
     return "2HKO";
   }
 
-  return formatRange(adjustedMin, adjustedMax, maxHp);
+  return formatRange(Math.min(minDealt, hp), Math.min(maxDealt, hp), maxHp);
+}
+
+/**
+ * Returns the total number of strikes `move` will deal for `attacker` purely
+ * from stacked Multi Lens (1 if no Multi Lens applies - Multi Lens and an
+ * innate {@linkcode MultiHitAttr} are mutually exclusive, since
+ * {@linkcode Move.canBeMultiStrikeEnhanced} already excludes `MultiHitAttr`
+ * moves).
+ */
+function getMultiLensHitCount(attacker: Pokemon, move: Move): number {
+  if (!move.canBeMultiStrikeEnhanced(attacker)) {
+    return 1;
+  }
+  const stackCount =
+    attacker
+      .getHeldItems()
+      .find(m => m instanceof PokemonMultiHitModifier)
+      ?.getStackCount() ?? 0;
+  return 1 + stackCount;
+}
+
+/**
+ * Computes the raw damage of the first Multi-Lens hit and of every hit after
+ * it (which all share the same flat 0.25x multiplier - see
+ * {@linkcode PokemonMultiHitModifier.applyDamageModifier}) by temporarily
+ * driving the attacker's `turnData` to the exact values the engine itself
+ * would have mid-resolution, then restoring it - reusing the real modifier
+ * logic instead of re-deriving the 0.75/0.5/0.25 multipliers here.
+ */
+function getRawDamagePerLensHit(
+  attacker: Pokemon,
+  defender: EnemyPokemon,
+  move: Move,
+  totalHits: number,
+): { first: number; rest: number } {
+  const { hitCount: origHitCount, hitsLeft: origHitsLeft } = attacker.turnData;
+  try {
+    attacker.turnData.hitCount = totalHits;
+    attacker.turnData.hitsLeft = totalHits;
+    const first = getRawDamage(attacker, defender, move);
+
+    attacker.turnData.hitsLeft = totalHits - 1;
+    const rest = totalHits > 1 ? getRawDamage(attacker, defender, move) : 0;
+
+    return { first, rest };
+  } finally {
+    attacker.turnData.hitCount = origHitCount;
+    attacker.turnData.hitsLeft = origHitsLeft;
+  }
 }
 
 /**
@@ -139,11 +226,19 @@ export function computeDamageRangeText(attacker: Pokemon, defender: EnemyPokemon
 
   if (move.hasAttr("FixedDamageAttr")) {
     const raw = getRawDamage(attacker, defender, move);
-    return formatSingleHit(defender, raw, raw);
+    return formatMultiHit(defender, [raw], [raw]);
   }
 
   if (move.power < 0 || move.category === MoveCategory.STATUS) {
     return undefined;
+  }
+
+  const lensHits = getMultiLensHitCount(attacker, move);
+  if (lensHits > 1) {
+    const { first, rest } = getRawDamagePerLensHit(attacker, defender, move, lensHits);
+    const maxHits = [first, ...Array.from({ length: lensHits - 1 }, () => rest)];
+    const minHits = maxHits.map(d => Math.floor(d * MIN_ROLL_MULTIPLIER));
+    return formatMultiHit(defender, minHits, maxHits);
   }
 
   const maxRaw = getRawDamage(attacker, defender, move);
@@ -177,7 +272,7 @@ export function computeDamageRangeText(attacker: Pokemon, defender: EnemyPokemon
     return `${formatRange(Math.min(minRaw, defender.hp), Math.min(maxRaw, defender.hp), maxHp)} ${hitLabel}`;
   }
 
-  return formatSingleHit(defender, minRaw, maxRaw);
+  return formatMultiHit(defender, [minRaw], [maxRaw]);
 }
 
 /**
