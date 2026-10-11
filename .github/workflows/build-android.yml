@@ -110,6 +110,14 @@ jobs:
             cp ${{ github.workspace }}/configs/android/capacitor/capacitor.config.json capacitor.config.json
           fi
 
+      - name: Inject Scooom dev-build flag
+        run: |
+          # scooom-dev.ts only exists if prune-stale-pokemon-assets.js ran (it's
+          # skippable via apply-patches.sh's MEMORY_PATCHES_ENABLED kill-switch).
+          if [ "${{ inputs.dev }}" = "true" ] && [ -f pokerogue-src/src/system/offline/scooom-dev.ts ]; then
+            sed -i "s/export const isScoomDev = false;/export const isScoomDev = true;/" pokerogue-src/src/system/offline/scooom-dev.ts
+          fi
+
       - name: Build PokeRogue
         working-directory: pokerogue-src
         env:

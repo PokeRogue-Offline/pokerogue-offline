@@ -100,6 +100,14 @@ jobs:
         # error even on a platform that will never execute that branch.
         run: pnpm add @capacitor/core@8.4.1 @capgo/capacitor-social-login@8.3.33
 
+      - name: Inject Scooom dev-build flag
+        run: |
+          # scooom-dev.ts only exists if prune-stale-pokemon-assets.js ran (it's
+          # skippable via apply-patches.sh's MEMORY_PATCHES_ENABLED kill-switch).
+          if [ "${{ inputs.dev }}" = "true" ] && [ -f pokerogue-src/src/system/offline/scooom-dev.ts ]; then
+            sed -i '' "s/export const isScoomDev = false;/export const isScoomDev = true;/" pokerogue-src/src/system/offline/scooom-dev.ts
+          fi
+
       - name: Build PokeRogue
         working-directory: pokerogue-src
         env:

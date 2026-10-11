@@ -84,9 +84,47 @@
  * setting on, toggle off mid-run, and specifically poke at a few Mystery
  * Encounters with preview sprites).
  *
+ * v2 - added temporary diagnostic logging to help debug a real-device report
+ * of forced reloads still happening with this feature on. Each individual
+ * removal is now wrapped in try/catch (runs in every build, unconditionally
+ * - a real safety improvement, not just diagnostics) so an unexpected
+ * failure is skipped instead of crashing the whole prune pass.
+ *
+ * The logging itself is gated on a dedicated `isScoomDev` flag
+ * (src/system/offline/scooom-dev.ts, a new file this patch copies in - sub-
+ * patch 0 below), NOT upstream's own `isDev`. Upstream's `isDev` is true
+ * only when `import.meta.env.MODE === "development"`, but every build this
+ * fork actually ships - regular releases, the "-dev" OAuth/app-id flavor,
+ * AND nightly - all run `pnpm build --mode app` (checked build-android.yml/
+ * build-ios.yml/build-exe.yml/build-appimage.yml/build-macos.yml - the `dev`
+ * workflow input only swaps OAuth config/icon/app id/package id, never the
+ * Vite mode), so upstream's `isDev` is never true in anything distributed,
+ * and gating on it would mean this logging could never be turned on without
+ * a one-off custom build. `isScoomDev` is a separate, fork-only flag that
+ * each build workflow's new "Inject Scooom dev-build flag" step flips to
+ * `true` specifically when `inputs.dev == 'true'` (i.e. nightly and
+ * manually-triggered dev-flavor builds) - so it's on exactly for "a Scooom
+ * dev build" and nothing else, without also enabling any of upstream's own
+ * ~40 isDev-gated behaviors (debug menus, dexForDevs, AI overrides, etc.)
+ * that a dev-flavor build was never meant to also turn on.
+ *
+ * When `isScoomDev` is true, each pruneStaleAssets() call both console.logs
+ * AND appends a line (capped to the last 200) to a localStorage key,
+ * 'offline_memoryPatchLog' - because the crash/reload this is meant to help
+ * diagnose may itself kill the WebView process before anyone's watching the
+ * live console, and (unlike console output) localStorage survives that.
+ * After a crash, reconnect (e.g. via a remote WebView inspector) and read it
+ * back with:
+ *
+ *   JSON.parse(localStorage.getItem('offline_memoryPatchLog') || '[]').join('\n')
+ *
+ * Each line includes the wave number, so the log can be correlated with
+ * "which wave did it actually crash on" even across a reload.
+ *
  * Targets: pokerogue-src/src/battle-scene.ts
  *          pokerogue-src/src/data/pokemon-species.ts
  *          pokerogue-src/src/phases/new-battle-phase.ts
+ *          pokerogue-src/src/system/offline/scooom-dev.ts (new file)
  */
 
 const fs = require("fs");
@@ -116,6 +154,23 @@ function requireAnchor(src, anchor, label) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Sub-patch 0: src/system/offline/scooom-dev.ts (new file)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const NEW_FILES_DIR = path.join(__dirname, "..", "..", "..", "new-files");
+const SCOOOM_DEV_PATH = path.join("pokerogue-src", "src", "system", "offline", "scooom-dev.ts");
+
+if (fs.existsSync(SCOOOM_DEV_PATH)) {
+  console.log("SKIP scooom-dev.ts — already exists");
+} else {
+  const scooomDevSrc = fs.readFileSync(
+    path.join(NEW_FILES_DIR, "src", "system", "offline", "scooom-dev.ts"),
+    "utf8",
+  );
+  writeFile(SCOOOM_DEV_PATH, scooomDevSrc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Sub-patch 1: src/battle-scene.ts
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -125,7 +180,41 @@ let battleSceneSrc = readFile(BATTLE_SCENE_PATH);
 if (battleSceneSrc.includes("pruneStaleAssets")) {
   console.log("SKIP battle-scene.ts — pruneStaleAssets already present");
 } else {
-  // 1a. Register every sprite atlas key the moment it's queued for load -
+  // 1a. Import isScoomDev (used by pruneStaleAssets() below - see this
+  // patch's header comment ("v2") for the isScoomDev vs. isDev reasoning).
+  const BATTLE_IMPORT_ANCHOR = `import { Battle } from "#app/battle";\n`;
+  requireAnchor(battleSceneSrc, BATTLE_IMPORT_ANCHOR, "Battle import in battle-scene.ts");
+  battleSceneSrc = battleSceneSrc.replace(
+    BATTLE_IMPORT_ANCHOR,
+    `${BATTLE_IMPORT_ANCHOR}import { isScoomDev } from "#system/offline/scooom-dev";\n`,
+  );
+
+  // 1b. Module-scope helper backing pruneStaleAssets()'s diagnostic logging.
+  // Inserted right before the class declaration (module scope, not a class
+  // member).
+  const CLASS_DECL_ANCHOR = `// TODO: Breakup into multiple scenes if possible/practical\nexport class BattleScene extends SceneBase {`;
+  requireAnchor(battleSceneSrc, CLASS_DECL_ANCHOR, "BattleScene class declaration in battle-scene.ts");
+  battleSceneSrc = battleSceneSrc.replace(
+    CLASS_DECL_ANCHOR,
+    `/** Offline: appends one line (capped to the last 200) to the persisted memory-patch debug log. */\n` +
+      `function appendMemoryDebugLog(line: string): void {\n` +
+      `  try {\n` +
+      `    const key = "offline_memoryPatchLog";\n` +
+      `    const log: string[] = JSON.parse(localStorage.getItem(key) ?? "[]");\n` +
+      `    log.push(\`\${new Date().toISOString()} \${line}\`);\n` +
+      `    while (log.length > 200) {\n` +
+      `      log.shift();\n` +
+      `    }\n` +
+      `    localStorage.setItem(key, JSON.stringify(log));\n` +
+      `  } catch {\n` +
+      `    // best-effort only - never let logging itself break anything\n` +
+      `  }\n` +
+      `}\n` +
+      `\n` +
+      `${CLASS_DECL_ANCHOR}`,
+  );
+
+  // 1c. Register every sprite atlas key the moment it's queued for load -
   // loadPokemonAtlas() is the single choke point all Pokemon sprite loads
   // (base species, player battle sprite, fusion battle sprite) go through.
   const LOAD_ATLAS_ANCHOR =
@@ -141,7 +230,7 @@ if (battleSceneSrc.includes("pruneStaleAssets")) {
       `    const variant = atlasPath.includes("variant/") || /_[0-3]$/.test(atlasPath);`,
   );
 
-  // 1b. New tracking Sets + trackPokemonCryKey() + pruneStaleAssets(), right
+  // 1d. New tracking Sets + trackPokemonCryKey() + pruneStaleAssets(), right
   // before the existing getActiveKeys() - the method they build on.
   const ACTIVE_KEYS_ANCHOR =
     `  /**\n` +
@@ -183,23 +272,47 @@ if (battleSceneSrc.includes("pruneStaleAssets")) {
       `   * playing the animation (e.g. PokedexUiHandler does this for species not on\n` +
       `   * the current field), so re-requesting an evicted key is the same lazy-load\n` +
       `   * path that already runs today, not a new one.\n` +
+      `   *\n` +
+      `   * Each individual removal is wrapped in try/catch so a single unexpected\n` +
+      `   * failure (e.g. Phaser throwing because some other GameObject unexpectedly\n` +
+      `   * still references a key we thought was safe to free - see the warning in\n` +
+      `   * Phaser's own TextureManager.remove() doc comment) is logged and skipped\n` +
+      `   * rather than crashing the whole prune pass / phase transition. That\n` +
+      `   * try/catch runs in every build. The logging itself (a one-line summary per\n` +
+      `   * call, both console-logged and persisted to localStorage) only runs when\n` +
+      `   * isScoomDev is true - see this patch's "v2" header comment for why that's\n` +
+      `   * a separate flag from upstream's own isDev, and the exact console command\n` +
+      `   * to read the persisted log back after a crash.\n` +
       `   */\n` +
       `  public pruneStaleAssets(): void {\n` +
       `    if (!settings.offline.aggressiveMemorySaving) {\n` +
       `      return;\n` +
       `    }\n` +
       `\n` +
+      `    const debugLogging = isScoomDev;\n` +
       `    const activeKeys = new Set(this.getActiveKeys());\n` +
+      `    let spritesFreed = 0;\n` +
+      `    let criesFreed = 0;\n` +
+      `    let errors = 0;\n` +
       `\n` +
       `    for (const key of this.trackedPokemonSpriteKeys) {\n` +
       `      if (activeKeys.has(key)) {\n` +
       `        continue;\n` +
       `      }\n` +
-      `      if (this.anims.exists(key)) {\n` +
-      `        this.anims.remove(key);\n` +
-      `      }\n` +
-      `      if (this.textures.exists(key)) {\n` +
-      `        this.textures.remove(key);\n` +
+      `      try {\n` +
+      `        if (this.anims.exists(key)) {\n` +
+      `          this.anims.remove(key);\n` +
+      `        }\n` +
+      `        if (this.textures.exists(key)) {\n` +
+      `          this.textures.remove(key);\n` +
+      `          spritesFreed++;\n` +
+      `        }\n` +
+      `      } catch (err) {\n` +
+      `        errors++;\n` +
+      `        if (debugLogging) {\n` +
+      `          console.error(\`[memory-patch] Failed to free sprite key "\${key}":\`, err);\n` +
+      `          appendMemoryDebugLog(\`ERROR freeing sprite "\${key}": \${err}\`);\n` +
+      `        }\n` +
       `      }\n` +
       `      this.trackedPokemonSpriteKeys.delete(key);\n` +
       `    }\n` +
@@ -208,10 +321,28 @@ if (battleSceneSrc.includes("pruneStaleAssets")) {
       `      if (activeKeys.has(key)) {\n` +
       `        continue;\n` +
       `      }\n` +
-      `      if (this.cache.audio.exists(key)) {\n` +
-      `        this.cache.audio.remove(key);\n` +
+      `      try {\n` +
+      `        if (this.cache.audio.exists(key)) {\n` +
+      `          this.cache.audio.remove(key);\n` +
+      `          criesFreed++;\n` +
+      `        }\n` +
+      `      } catch (err) {\n` +
+      `        errors++;\n` +
+      `        if (debugLogging) {\n` +
+      `          console.error(\`[memory-patch] Failed to free cry key "\${key}":\`, err);\n` +
+      `          appendMemoryDebugLog(\`ERROR freeing cry "\${key}": \${err}\`);\n` +
+      `        }\n` +
       `      }\n` +
       `      this.trackedPokemonCryKeys.delete(key);\n` +
+      `    }\n` +
+      `\n` +
+      `    if (debugLogging) {\n` +
+      `      const summary =\n` +
+      `        \`wave=\${this.currentBattle?.waveIndex ?? "?"} freed=\${spritesFreed}sprite(s)/\${criesFreed}cry(ies)\` +\n` +
+      `        \` tracked=\${this.trackedPokemonSpriteKeys.size + spritesFreed}/\${this.trackedPokemonCryKeys.size + criesFreed}\` +\n` +
+      `        \` active=\${activeKeys.size}\${errors ? \` errors=\${errors}\` : ""}\`;\n` +
+      `      console.log(\`[memory-patch] pruneStaleAssets: \${summary}\`);\n` +
+      `      appendMemoryDebugLog(summary);\n` +
       `    }\n` +
       `  }\n` +
       `\n` +
