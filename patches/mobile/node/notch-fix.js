@@ -41,7 +41,7 @@ const VIEWPORT_RE = /<meta\s+name="viewport"[^>]*>/i;
 //   When the soft keyboard opens, only the *visual* viewport shrinks —
 //   the layout viewport (and therefore the Phaser canvas) is untouched.
 //   This is a CSS-level complement to windowSoftInputMode="adjustNothing".
-const REPLACEMENT = '<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">';
+const REPLACEMENT = '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=contain, maximum-scale=1.0, user-scalable=no" />';
 
 if (!VIEWPORT_RE.test(src)) {
   console.error("ERROR: Could not find a <meta name=\"viewport\"> tag in index.html.");
