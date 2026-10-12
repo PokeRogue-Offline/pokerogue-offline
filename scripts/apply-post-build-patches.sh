@@ -15,8 +15,8 @@ source "$(dirname "$0")/patch-lib.sh"
 if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
 
 #  apply_patch "notch-fix.js"           mobile
-  apply_patch "7728.patch"
-  apply_patch "fix-browser.js"         mobile
+  apply_patch "7728.patch"		mobile
+  apply_patch "fix-browser.js"       	mobile
 #  apply_patch "canvas-scale-fix.js"    mobile
 
 fi
