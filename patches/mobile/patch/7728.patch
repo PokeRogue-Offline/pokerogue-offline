@@ -1,0 +1,23 @@
+From 80e4bf75ae73aa3c9c6d6fdb847fc3adcabae880 Mon Sep 17 00:00:00 2001
+From: greenwarrior33 <102493252+greenwarrior33@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 01:27:35 -0400
+Subject: [PATCH] Update viewport fit
+
+Updating meta tag info related to viewport to avoid portions of the gameplay area being hidden behind punch holes or cutouts when full screen on mobile devices
+---
+ index.html | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/index.html b/index.html
+index 630a85018d88..40142c0812da 100644
+--- a/index.html
++++ b/index.html
+@@ -29,7 +29,7 @@
+ 	<link rel="apple-touch-icon" href="./logo512.png" />
+ 	<link rel="shortcut icon" type="image/png" href="./logo512.png" />
+ 	<link rel="canonical" href="https://pokerogue.net" />
+-	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
++	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=contain, maximum-scale=1.0, user-scalable=no" />
+ 	<style type="text/css">
+ 		@font-face {
+ 			font-family: 'emerald';
