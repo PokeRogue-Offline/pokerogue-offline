@@ -121,9 +121,43 @@
  * Each line includes the wave number, so the log can be correlated with
  * "which wave did it actually crash on" even across a reload.
  *
+ * v3 - fixes a real freeze reported in GitHub issue #10: getActiveKeys()
+ * only covers the current player+enemy party, so a Pokemon that's on screen
+ * but NOT yet a party member (e.g. one that just hatched from an egg - see
+ * data/egg.ts's generatePlayerPokemon(), which never pushes it into the
+ * actual party array) could have its sprite texture freed by
+ * pruneStaleAssets() while the egg-hatch UI (src/phases/egg-hatch-phase.ts,
+ * src/ui/containers/pokemon-hatch-info-container.ts) was still rendering it,
+ * crashing Phaser's render loop (SpritePipeline.onBind /
+ * FieldSpritePipeline.batchSprite reading a texture whose source array was
+ * just emptied) and freezing the game with no further frames drawn.
+ *
+ * Fix: a new `getInUseTextureKeys()` walks the live scene graph
+ * (`this.children.list`, recursing through Containers - including Pokemon/
+ * Trainer/MysteryEncounterIntroVisuals, which are Containers themselves) to
+ * find every texture key actually rendered by something on screen right
+ * now, and pruneStaleAssets() additionally protects any key in that set.
+ * This generalizes to every current and future UI surface that can show a
+ * non-party Pokemon sprite (Pokedex, Starter Select, Mystery Encounter
+ * previews, etc.) without needing to special-case each one.
+ *
+ * The exact same gap existed in the pre-existing (unpatched)
+ * `clearBiomeAssets()` - a hardcoded key list freed with no check that
+ * `arenaBg`/`arenaPlayer`/`arenaEnemy` had actually released the key - so
+ * sub-patch 1e reuses `getInUseTextureKeys()` there too.
+ *
+ * Sub-patches 4 and 5 add defensive guards in the sprite render pipeline
+ * itself (src/pipelines/sprite.ts, src/pipelines/field-sprite.ts) as a
+ * safety net: if a texture is ever evicted while still referenced despite
+ * the scene-graph check above (e.g. a GameObject not yet attached to the
+ * tree mid-transition), the sprite is skipped/hidden for that frame instead
+ * of throwing and killing the render loop.
+ *
  * Targets: pokerogue-src/src/battle-scene.ts
  *          pokerogue-src/src/data/pokemon-species.ts
  *          pokerogue-src/src/phases/new-battle-phase.ts
+ *          pokerogue-src/src/pipelines/sprite.ts
+ *          pokerogue-src/src/pipelines/field-sprite.ts
  *          pokerogue-src/src/system/offline/scooom-dev.ts (new file)
  */
 
@@ -258,6 +292,34 @@ if (battleSceneSrc.includes("pruneStaleAssets")) {
       `  }\n` +
       `\n` +
       `  /**\n` +
+      `   * Offline: returns the texture keys of every Sprite/Image/NineSlice\n` +
+      `   * currently in the scene's display list (recursively, through nested\n` +
+      `   * Containers - including Pokemon/Trainer/MysteryEncounterIntroVisuals,\n` +
+      `   * which are themselves Containers). pruneStaleAssets() and\n` +
+      `   * clearBiomeAssets() both use this so a key is never freed while\n` +
+      `   * something on screen is still rendering it, even if that GameObject\n` +
+      `   * belongs to a Pokemon not counted by getActiveKeys() (e.g. a just-\n` +
+      `   * hatched egg Pokemon not yet in the party - see this patch's "v3"\n` +
+      `   * header comment for the crash this fixes).\n` +
+      `   */\n` +
+      `  private getInUseTextureKeys(): Set<string> {\n` +
+      `    const inUseKeys = new Set<string>();\n` +
+      `    const walk = (obj: any): void => {\n` +
+      `      if (!obj) {\n` +
+      `        return;\n` +
+      `      }\n` +
+      `      if (typeof obj.texture?.key === "string") {\n` +
+      `        inUseKeys.add(obj.texture.key);\n` +
+      `      }\n` +
+      `      if (Array.isArray(obj.list)) {\n` +
+      `        obj.list.forEach(walk);\n` +
+      `      }\n` +
+      `    };\n` +
+      `    this.children.list.forEach(walk);\n` +
+      `    return inUseKeys;\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
       `   * Offline: frees Pokemon sprite textures/anims and cry audio buffers loaded\n` +
       `   * for a Pokemon no longer on the field (party or enemy, current wave - see\n` +
       `   * getActiveKeys()). Intended to run right after a wave transition, once\n` +
@@ -291,12 +353,13 @@ if (battleSceneSrc.includes("pruneStaleAssets")) {
       `\n` +
       `    const debugLogging = isScoomDev;\n` +
       `    const activeKeys = new Set(this.getActiveKeys());\n` +
+      `    const inUseKeys = this.getInUseTextureKeys();\n` +
       `    let spritesFreed = 0;\n` +
       `    let criesFreed = 0;\n` +
       `    let errors = 0;\n` +
       `\n` +
       `    for (const key of this.trackedPokemonSpriteKeys) {\n` +
-      `      if (activeKeys.has(key)) {\n` +
+      `      if (activeKeys.has(key) || inUseKeys.has(key)) {\n` +
       `        continue;\n` +
       `      }\n` +
       `      try {\n` +
@@ -353,6 +416,39 @@ if (battleSceneSrc.includes("pruneStaleAssets")) {
       `   * @returns a string array of active sprite and audio keys that should not be deleted\n` +
       `   */\n` +
       `  getActiveKeys(): string[] {`,
+  );
+
+  // 1e. clearBiomeAssets() predates this patch and has the exact same gap
+  // getInUseTextureKeys() above fixes for pruneStaleAssets() - a hardcoded
+  // key list freed with no check that arenaBg/arenaPlayer/arenaEnemy etc.
+  // actually released the key first. Reuse the same helper here.
+  const CLEAR_BIOME_ANCHOR =
+    `    for (const key of keysToClear) {\n` +
+    `      if (this.anims.exists(key)) {\n` +
+    `        console.log(\`Removing animation for key \${key}..\`);\n` +
+    `        this.anims.remove(key);\n` +
+    `      }\n` +
+    `\n` +
+    `      if (this.textures.exists(key)) {\n` +
+    `        this.textures.remove(key);\n` +
+    `      }\n` +
+    `    }\n` +
+    `  }`;
+  requireAnchor(battleSceneSrc, CLEAR_BIOME_ANCHOR, "clearBiomeAssets() eviction loop in battle-scene.ts");
+  battleSceneSrc = battleSceneSrc.replace(
+    CLEAR_BIOME_ANCHOR,
+    `    const inUseKeys = this.getInUseTextureKeys();\n` +
+      `    for (const key of keysToClear) {\n` +
+      `      if (this.anims.exists(key)) {\n` +
+      `        console.log(\`Removing animation for key \${key}..\`);\n` +
+      `        this.anims.remove(key);\n` +
+      `      }\n` +
+      `\n` +
+      `      if (this.textures.exists(key) && !inUseKeys.has(key)) {\n` +
+      `        this.textures.remove(key);\n` +
+      `      }\n` +
+      `    }\n` +
+      `  }`,
   );
 
   writeFile(BATTLE_SCENE_PATH, battleSceneSrc);
@@ -415,6 +511,98 @@ if (newBattlePhaseSrc.includes("pruneStaleAssets")) {
   );
 
   writeFile(NEW_BATTLE_PHASE_PATH, newBattlePhaseSrc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-patch 4: src/pipelines/sprite.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SPRITE_PIPELINE_PATH = path.join("pokerogue-src", "src", "pipelines", "sprite.ts");
+let spritePipelineSrc = readFile(SPRITE_PIPELINE_PATH);
+
+if (spritePipelineSrc.includes("sprite.texture?.source?.[0]")) {
+  console.log("SKIP sprite.ts — onBind guard already present");
+} else {
+  const ONBIND_ANCHOR =
+    `  onBind(gameObject: Phaser.GameObjects.GameObject): void {\n` +
+    `    super.onBind(gameObject);\n` +
+    `\n` +
+    `    const sprite = gameObject as Phaser.GameObjects.Sprite;\n` +
+    `\n` +
+    `    // TODO: Add strong typing on this stuff\n` +
+    `    const data = sprite.pipelineData;`;
+  requireAnchor(spritePipelineSrc, ONBIND_ANCHOR, "SpritePipeline.onBind() signature in sprite.ts");
+  spritePipelineSrc = spritePipelineSrc.replace(
+    ONBIND_ANCHOR,
+    `  onBind(gameObject: Phaser.GameObjects.GameObject): void {\n` +
+      `    super.onBind(gameObject);\n` +
+      `\n` +
+      `    const sprite = gameObject as Phaser.GameObjects.Sprite;\n` +
+      `\n` +
+      `    // Offline: a sprite whose texture was evicted by pruneStaleAssets()/\n` +
+      `    // clearBiomeAssets() between frames has no texture source left - hide\n` +
+      `    // it instead of crashing here (see prune-stale-pokemon-assets.js "v3").\n` +
+      `    if (!sprite.texture?.source?.[0]) {\n` +
+      `      sprite.setVisible(false);\n` +
+      `      return;\n` +
+      `    }\n` +
+      `\n` +
+      `    // TODO: Add strong typing on this stuff\n` +
+      `    const data = sprite.pipelineData;`,
+  );
+
+  writeFile(SPRITE_PIPELINE_PATH, spritePipelineSrc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-patch 5: src/pipelines/field-sprite.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FIELD_SPRITE_PIPELINE_PATH = path.join("pokerogue-src", "src", "pipelines", "field-sprite.ts");
+let fieldSpritePipelineSrc = readFile(FIELD_SPRITE_PIPELINE_PATH);
+
+if (fieldSpritePipelineSrc.includes("override batchSprite")) {
+  console.log("SKIP field-sprite.ts — batchSprite guard already present");
+} else {
+  const ONBATCH_ANCHOR =
+    `  onBatch(gameObject: Phaser.GameObjects.GameObject): void {\n` +
+    `    if (gameObject) {\n` +
+    `      this.flush();\n` +
+    `    }\n` +
+    `  }\n` +
+    `}`;
+  requireAnchor(fieldSpritePipelineSrc, ONBATCH_ANCHOR, "FieldSpritePipeline.onBatch() + class close in field-sprite.ts");
+  fieldSpritePipelineSrc = fieldSpritePipelineSrc.replace(
+    ONBATCH_ANCHOR,
+    `  onBatch(gameObject: Phaser.GameObjects.GameObject): void {\n` +
+      `    if (gameObject) {\n` +
+      `      this.flush();\n` +
+      `    }\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * Offline: safety net alongside the onBind() guard in sprite.ts - if a\n` +
+      `   * sprite's texture was evicted from the cache (pruneStaleAssets()/\n` +
+      `   * clearBiomeAssets()) between frames, Phaser's own\n` +
+      `   * MultiPipeline.batchSprite reads frame.glTexture unconditionally and\n` +
+      `   * throws. Skip batching instead - the sprite just doesn't render that\n` +
+      `   * frame rather than crashing the whole render loop. See\n` +
+      `   * prune-stale-pokemon-assets.js "v3".\n` +
+      `   */\n` +
+      `  override batchSprite(\n` +
+      `    gameObject: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite,\n` +
+      `    camera: Phaser.Cameras.Scene2D.Camera,\n` +
+      `    parentTransformMatrix?: Phaser.GameObjects.Components.TransformMatrix,\n` +
+      `  ): void {\n` +
+      `    if (!gameObject?.frame?.source) {\n` +
+      `      return;\n` +
+      `    }\n` +
+      `    super.batchSprite(gameObject, camera, parentTransformMatrix);\n` +
+      `  }\n` +
+      `}`,
+  );
+
+  writeFile(FIELD_SPRITE_PIPELINE_PATH, fieldSpritePipelineSrc);
 }
 
 console.log("Stale Pokemon asset pruning applied successfully.");
