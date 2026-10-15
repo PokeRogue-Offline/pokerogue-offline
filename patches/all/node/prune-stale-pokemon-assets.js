@@ -370,16 +370,22 @@ if (speciesSrc.includes("trackPokemonCryKey")) {
 } else {
   const CRY_LOAD_ANCHOR =
     `    globalScene.loadPokemonAtlas(spriteKey, this.getSpriteAtlasPath(female, formIndex, shiny, variant, back));\n` +
-    `    globalScene.load.audio(this.getCryKey(formIndex), \`audio/\${this.getCryKey(formIndex)}.m4a\`);`;
+    `    // TODO: this should be routed through audiomanager rather than a raw \`load.audio\` call\n` +
+    `    if (audioManager.isAudioEnabled) {\n` +
+    `      globalScene.load.audio(this.getCryKey(formIndex), \`audio/\${this.getCryKey(formIndex)}.m4a\`);\n` +
+    `    }`;
   requireAnchor(speciesSrc, CRY_LOAD_ANCHOR, "cry audio load in loadAssets() in pokemon-species.ts");
   speciesSrc = speciesSrc.replace(
     CRY_LOAD_ANCHOR,
     `    globalScene.loadPokemonAtlas(spriteKey, this.getSpriteAtlasPath(female, formIndex, shiny, variant, back));\n` +
-      `    const cryKey = this.getCryKey(formIndex);\n` +
-      `    globalScene.load.audio(cryKey, \`audio/\${cryKey}.m4a\`);\n` +
-      `    // Offline: register so pruneStaleAssets() can free this cry once no active\n` +
-      `    // Pokemon uses it (see battle-scene.ts).\n` +
-      `    globalScene.trackPokemonCryKey(cryKey);`,
+      `    // TODO: this should be routed through audiomanager rather than a raw \`load.audio\` call\n` +
+      `    if (audioManager.isAudioEnabled) {\n` +
+      `      const cryKey = this.getCryKey(formIndex);\n` +
+      `      globalScene.load.audio(cryKey, \`audio/\${cryKey}.m4a\`);\n` +
+      `      // Offline: register so pruneStaleAssets() can free this cry once no active\n` +
+      `      // Pokemon uses it (see battle-scene.ts).\n` +
+      `      globalScene.trackPokemonCryKey(cryKey);\n` +
+      `    }`,
   );
 
   writeFile(SPECIES_PATH, speciesSrc);
