@@ -23,6 +23,30 @@
  *   Uses a regex anchor so minor upstream indentation/variable-name changes
  *   don't break the match.
  *
+ * Part 3 — Android .prsv MIME fallback for the import file picker:
+ *   Capacitor's Android WebView file-input bridge (BridgeWebChromeClient.
+ *   getValidTypes(), capacitor-android 8.4.1) drops any accept entry prefixed
+ *   with "." that android.webkit.MimeTypeMap doesn't resolve to a MIME type,
+ *   with no fallback -- it's just omitted from the SAF picker's
+ *   EXTRA_MIME_TYPES filter. ".prsv" isn't a registered extension, so it's
+ *   silently excluded on Android (".json"/".txt" stay visible since those
+ *   resolve fine), hiding .prsv files in the picker. Android's MediaProvider
+ *   (MimeUtils.resolveMimeType(), which backs the "Downloads" SAF root)
+ *   reports files with unregistered extensions as "application/octet-stream"
+ *   -- adding that literal MIME type to accept (only for native Android, via
+ *   Capacitor.getPlatform() === "android") makes .prsv files reappear in the
+ *   picker without widening the filter to admit every other file type too.
+ *   iOS (which has its own dedicated .prsv UTI registration in
+ *   build-ios.yml) and desktop/web are untouched.
+ *
+ *   Documented fallback, not applied: if real-device testing shows .prsv
+ *   still isn't selectable (e.g. the device's Downloads provider doesn't use
+ *   the application/octet-stream convention), widen accept to the wildcard
+ *   "any file" value for native Android instead -- e.g. replace the android
+ *   branch's value below with that wildcard. That shows every file in the
+ *   picker, not just .prsv/.json/.txt; a usability regression, but a
+ *   trivial, safe escape hatch.
+ *
  * Targets: pokerogue-src/src/system/game-data.ts
  */
 
@@ -218,6 +242,38 @@ ${i}}`;
 
   src = patched;
   console.log("Capacitor export fix applied.");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part 3: Android .prsv MIME fallback for the import file picker
+// ─────────────────────────────────────────────────────────────────────────────
+
+if (src.includes("android-prsv-mime-fallback")) {
+  console.log("Android .prsv MIME fallback already present, skipping.");
+} else {
+  const ACCEPT_OLD = `saveFile.accept = isIos() ? ".prsv" : ".prsv, .json, .txt";`;
+  const ACCEPT_NEW = `// android-prsv-mime-fallback: Capacitor's Android file picker
+    // (BridgeWebChromeClient.getValidTypes()) drops any ".ext" accept entry
+    // that android.webkit.MimeTypeMap doesn't resolve, with no fallback --
+    // ".prsv" isn't registered, so it's silently excluded from the SAF
+    // picker's EXTRA_MIME_TYPES filter. Android's MediaProvider reports
+    // unregistered-extension files as "application/octet-stream" (see
+    // MimeUtils.resolveMimeType()/ClipDescription.MIMETYPE_UNKNOWN), so
+    // adding that literal MIME type -- only on native Android -- keeps
+    // .prsv files visible without widening accept to "*/*" for everyone.
+    saveFile.accept = isIos()
+      ? ".prsv"
+      : (window as any).Capacitor?.getPlatform?.() === "android"
+        ? ".prsv, .json, .txt, application/octet-stream"
+        : ".prsv, .json, .txt";`;
+
+  if (!src.includes(ACCEPT_OLD)) {
+    console.error("ERROR: Could not find saveFile.accept assignment in game-data.ts.");
+    process.exit(1);
+  }
+  src = src.replace(ACCEPT_OLD, ACCEPT_NEW);
+
+  console.log("Android .prsv MIME fallback applied.");
 }
 
 fs.writeFileSync(TARGET, src, "utf8");
