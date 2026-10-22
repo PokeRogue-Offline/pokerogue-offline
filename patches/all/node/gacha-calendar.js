@@ -178,7 +178,8 @@ if (menuSrc.includes("GACHA_CALENDAR")) {
     `            : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
     `        handler: () => this.optionSelected(option),\n` +
     `        keepOpen: true,\n` +
-    `      };`;
+    `        ...conditionalOpts,\n` +
+    `      } satisfies OptionSelectItem;`;
   requireAnchor(menuSrc, LABEL_ANCHOR, "menuOptions label map in menu-ui-handler.ts (post app-settings-menu.js)");
   menuSrc = menuSrc.replace(
     LABEL_ANCHOR,
@@ -191,7 +192,8 @@ if (menuSrc.includes("GACHA_CALENDAR")) {
       `              : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
       `        handler: () => this.optionSelected(option),\n` +
       `        keepOpen: true,\n` +
-      `      };`,
+      `        ...conditionalOpts,\n` +
+      `      } satisfies OptionSelectItem;`,
   );
 
   // 4c. Switch-case — open the new screen, same pattern as EGG_GACHA.

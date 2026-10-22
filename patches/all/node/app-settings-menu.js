@@ -777,7 +777,8 @@ if (menuSrc.includes("MenuOptions.OFFLINE")) {
     `        label: \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
     `        handler: () => this.optionSelected(option),\n` +
     `        keepOpen: true,\n` +
-    `      };`;
+    `        ...conditionalOpts,\n` +
+    `      } satisfies OptionSelectItem;`;
   requireAnchor(menuSrc, LABEL_ANCHOR, "menuOptions label map in menu-ui-handler.ts");
   menuSrc = menuSrc.replace(
     LABEL_ANCHOR,
@@ -788,7 +789,8 @@ if (menuSrc.includes("MenuOptions.OFFLINE")) {
       `            : \`\${i18next.t(\`menuUiHandler:\${toCamelCase(MenuOptions[option])}\`)}\`,\n` +
       `        handler: () => this.optionSelected(option),\n` +
       `        keepOpen: true,\n` +
-      `      };`,
+      `        ...conditionalOpts,\n` +
+      `      } satisfies OptionSelectItem;`,
   );
 
   // 8c. Switch-case — open the Backup sub-tab (the landing screen). Same
