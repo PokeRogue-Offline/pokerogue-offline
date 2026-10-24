@@ -7,9 +7,12 @@ import android.util.Log;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.webkit.RenderProcessGoneDetail;
+import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginHandle;
+import com.getcapacitor.WebViewListener;
 // Required by @capgo/capacitor-social-login for Google sign-in's activity
 // result to be routed back to the plugin correctly. Per the plugin's own
 // docs: "ModifiedMainActivityForSocialLoginPlugin is VERY VERY important."
@@ -18,6 +21,23 @@ import ee.forgr.capacitor.social.login.ModifiedMainActivityForSocialLoginPlugin;
 import ee.forgr.capacitor.social.login.SocialLoginPlugin;
 
 public class MainActivity extends BridgeActivity implements ModifiedMainActivityForSocialLoginPlugin {
+
+    // If the WebView's render process dies and nothing claims the event, Android
+    // kills the whole app instead of just the WebView. Claiming it here and
+    // recreating the activity reloads the game at the title screen, so the player
+    // can hit Continue instead of losing the app outright. The bridge's WebView is
+    // the only WebView in this app, so this single listener covers it.
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getBridge().addWebViewListener(new WebViewListener() {
+            @Override
+            public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail) {
+                runOnUiThread(() -> recreate());
+                return true;
+            }
+        });
+    }
 
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
