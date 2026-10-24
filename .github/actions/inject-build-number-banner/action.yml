@@ -1,0 +1,33 @@
+name: Inject build number into title banner
+description: >-
+  Substitutes BUILD_NUMBER_PLACEHOLDER in the title-screen banner with the
+  real build number, appending " DEV" on dev builds. Used by all 5 build
+  workflows.
+inputs:
+  build-number:
+    description: 'Build number to inject'
+    required: true
+  dev:
+    description: "'true' for a dev build (appends DEV to the banner)"
+    required: false
+    default: 'false'
+  target-file:
+    description: 'File containing BUILD_NUMBER_PLACEHOLDER'
+    required: false
+    default: 'pokerogue-src/src/ui/handlers/title-ui-handler.ts'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BUILD_NUM: ${{ inputs.build-number }}
+        DEV: ${{ inputs.dev }}
+        FILE: ${{ inputs.target-file }}
+      run: |
+        source "${{ github.workspace }}/scripts/sed-lib.sh"
+        assert_sed "$FILE" BUILD_NUMBER_PLACEHOLDER
+        if [ "$DEV" = "true" ]; then
+          portable_sed_i "s/BUILD_NUMBER_PLACEHOLDER/${BUILD_NUM} DEV/g" "$FILE"
+        else
+          portable_sed_i "s/BUILD_NUMBER_PLACEHOLDER/${BUILD_NUM}/g" "$FILE"
+        fi

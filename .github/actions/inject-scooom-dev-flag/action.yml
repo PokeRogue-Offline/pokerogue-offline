@@ -1,0 +1,27 @@
+name: Inject Scooom dev-build flag
+description: >-
+  Flips isScoomDev to true in scooom-dev.ts on dev builds. The file only
+  exists if prune-stale-pokemon-assets.js ran (skippable via
+  apply-patches.sh's MEMORY_PATCHES_ENABLED kill-switch), so this is a
+  no-op when the file is missing. Used by all 5 build workflows.
+inputs:
+  dev:
+    description: "'true' for a dev build"
+    required: false
+    default: 'false'
+  target-file:
+    description: 'Path to scooom-dev.ts'
+    required: false
+    default: 'pokerogue-src/src/system/offline/scooom-dev.ts'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DEV: ${{ inputs.dev }}
+        FILE: ${{ inputs.target-file }}
+      run: |
+        if [ "$DEV" = "true" ] && [ -f "$FILE" ]; then
+          source "${{ github.workspace }}/scripts/sed-lib.sh"
+          portable_sed_i "s/export const isScoomDev = false;/export const isScoomDev = true;/" "$FILE"
+        fi

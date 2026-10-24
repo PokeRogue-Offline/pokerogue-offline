@@ -13,7 +13,6 @@
     "main.cjs",
     "preload.cjs",
     "appIcon.icns",
-    "full_unlocks.prsv",
     "node_modules/**/*"
   ]
 }

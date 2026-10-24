@@ -1,0 +1,39 @@
+name: Set Electron package.json metadata
+description: >-
+  Fills in description/author if missing, and sets main to the Electron
+  entry point. Used by the 3 desktop (Electron) build workflows.
+inputs:
+  package-json-path:
+    description: 'Path to the package.json to patch'
+    required: false
+    default: 'pokerogue-src/package.json'
+  description:
+    description: 'Package description, only set if currently missing'
+    required: false
+    default: 'PokeRogue Offline'
+  author:
+    description: 'Package author, only set if currently missing'
+    required: false
+    default: 'Scooom'
+  main:
+    description: 'Electron entry point'
+    required: false
+    default: 'main.cjs'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PKG: ${{ inputs.package-json-path }}
+        DESC: ${{ inputs.description }}
+        AUTHOR: ${{ inputs.author }}
+        MAIN: ${{ inputs.main }}
+      run: |
+        node -e "
+          const fs = require('fs');
+          const pkg = require('./$PKG');
+          if (!pkg.description) pkg.description = process.env.DESC;
+          if (!pkg.author) pkg.author = process.env.AUTHOR;
+          pkg.main = process.env.MAIN;
+          fs.writeFileSync('./$PKG', JSON.stringify(pkg, null, 2));
+        "

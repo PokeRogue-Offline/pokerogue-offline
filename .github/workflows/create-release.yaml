@@ -46,6 +46,18 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }} # This exposes the data
       is_release: ${{ steps.gate.outputs.is_release }}
+      build_number: ${{ steps.build.outputs.number }}
+      ipa_size: ${{ steps.ipa_size.outputs.size }}
+    # Job-level permissions override the workflow-level block entirely, so
+    # this repeats actions/contents from above and adds what attest-build-
+    # provenance needs (id-token to mint the signing identity, attestations
+    # to publish the result) - scoped to this job only, since no other job
+    # in this workflow produces anything worth attesting.
+    permissions:
+      actions: write
+      contents: write
+      attestations: write
+      id-token: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -255,7 +267,7 @@ jobs:
             
             if [ "$APPIMAGE_STATUS" = "completed" ] && [ "$APPIMAGE_CONCLUSION" != "success" ]; then
               cancel_run "$IOS_RUN_ID" "iOS" "$IOS_STATUS"
-              cancel_run "$ANDROID_RUN_ID" "Android" "$APPIMAGE_STATUS"
+              cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
               echo "ERROR: AppImage build ended with: $APPIMAGE_CONCLUSION"
@@ -465,6 +477,29 @@ jobs:
           path: PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.dmg
           retention-days: 30
 
+      - name: Get IPA size
+        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        id: ipa_size
+        run: echo "size=$(wc -c < PokeRogueOffline.ipa)" >> $GITHUB_OUTPUT
+
+      # -----------------------------------------------------------------------
+      # Checksums for the six binaries, so a sideloader downloading an
+      # unsigned binary over a flaky connection (or wanting to confirm it
+      # wasn't tampered with in transit) has something to check it against.
+      # -----------------------------------------------------------------------
+      - name: Generate checksums
+        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        run: |
+          sha256sum \
+            PokeRogueOffline.ipa \
+            PokeRogueOffline.apk \
+            PokeRogueOffline.AppImage \
+            PokeRogueOffline.exe \
+            PokeRogueOffline-x64.dmg \
+            PokeRogueOffline-arm64.dmg \
+            > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       # -----------------------------------------------------------------------
       # Publish the combined GitHub release. Only when dev=false AND branch=main.
       # -----------------------------------------------------------------------
@@ -487,6 +522,8 @@ jobs:
             - **PokeRogueOffline.exe** — Windows Portable EXE
             - **PokeRogueOffline-x64.dmg** — macOS (Intel)
             - **PokeRogueOffline-arm64.dmg** — macOS (Apple Silicon)
+            - **SHA256SUMS.txt** — checksums for the six files above
+            - Build provenance for each binary is attested via GitHub Actions — verify with `gh attestation verify <file> --repo ${{ github.repository }}`
 
           files: |
             PokeRogueOffline.ipa
@@ -495,49 +532,81 @@ jobs:
             PokeRogueOffline.exe
             PokeRogueOffline-x64.dmg
             PokeRogueOffline-arm64.dmg
+            SHA256SUMS.txt
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get IPA size
+      # -----------------------------------------------------------------------
+      # Cryptographically ties these exact files to this workflow run/commit,
+      # independent of the checksums above (which only prove the download
+      # wasn't corrupted, not who built it). Verifiable with
+      # `gh attestation verify <file> --repo <owner>/<repo>`.
+      # -----------------------------------------------------------------------
+      - name: Attest build provenance
         if: ${{ steps.gate.outputs.is_release == 'true' }}
-        id: ipa_size
-        run: echo "size=$(wc -c < PokeRogueOffline.ipa)" >> $GITHUB_OUTPUT
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'PokeRogueOffline*'
 
-      # -----------------------------------------------------------------------
-      # repo.json (the AltStore source) lives permanently on the `seed`
-      # branch now — GitHub Pages (pokerogue-offline.github.io) serves from
-      # `seed`, and that's the URL baked into shipped builds' AltStore source
-      # and repo.json's own iconURL/website fields. `main` no longer carries
-      # a copy, so check out `seed` and update its repo.json directly.
-      # appIcon.png is also re-copied from `main` in case the icon changed.
-      # -----------------------------------------------------------------------
+  # -----------------------------------------------------------------------
+  # repo.json (the AltStore source) lives permanently on the `seed` branch
+  # now — GitHub Pages (pokerogue-offline.github.io) serves from `seed`, and
+  # that's the URL baked into shipped builds' AltStore source and repo.json's
+  # own iconURL/website fields. `main` no longer carries a copy, so check out
+  # `seed` and update its repo.json directly. appIcon.png is also re-copied
+  # from `main` in case the icon changed.
+  #
+  # Split into its own job (rather than a tail step of `release`) so the
+  # `seed-branch-write` concurrency group below only queues this short git
+  # operation behind fetch-seed.yaml's own push to the same branch, instead
+  # of blocking the daily seed fetch behind this job's up-to-90-minute build
+  # wait.
+  # -----------------------------------------------------------------------
+  update-altstore:
+    needs: release
+    if: ${{ needs.release.outputs.is_release == 'true' && inputs.skip_altstore != true }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: seed-branch-write
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
       - name: Checkout seed branch
-        if: ${{ steps.gate.outputs.is_release == 'true' && inputs.skip_altstore != true }}
         uses: actions/checkout@v4
         with:
           ref: seed
           path: seed-branch
 
       - name: Update AltStore source on seed branch
-        if: ${{ steps.gate.outputs.is_release == 'true' && inputs.skip_altstore != true }}
         env:
-          APP_VERSION: ${{ steps.version.outputs.version }}
-          BUILD_NUMBER: ${{ steps.build.outputs.number }}
-          IPA_SIZE: ${{ steps.ipa_size.outputs.size }}
+          APP_VERSION: ${{ needs.release.outputs.version }}
+          BUILD_NUMBER: ${{ needs.release.outputs.build_number }}
+          IPA_SIZE: ${{ needs.release.outputs.ipa_size }}
           REPO_JSON_PATH: seed-branch/docs/repo.json
         run: node scripts/update-altstore-source.js
 
       - name: Commit AltStore source to seed branch
-        if: ${{ steps.gate.outputs.is_release == 'true' && inputs.skip_altstore != true }}
         run: |
           cp docs/appIcon.png seed-branch/docs/appIcon.png
           cd seed-branch
           git config user.name "ScooomBot"
           git config user.email "scooombot@scooom.xyz"
           git add docs/repo.json docs/appIcon.png
-          git diff --staged --quiet || git commit -m "Update AltStore source for v${{ steps.version.outputs.version }}"
+          git diff --staged --quiet || git commit -m "Update AltStore source for v${{ needs.release.outputs.version }}"
           git push
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -H "Title: AltStore Source Update Failed ❌" \
+               -H "Tags: warning,skull" \
+               -H "Markdown: yes" \
+               -H "Click: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+               -d "Failed to update the AltStore source (repo.json) on the seed branch for v${{ needs.release.outputs.version }}. The GitHub release itself already published successfully." \
+               ${{ secrets.NTFY_URL }}
 
   # -----------------------------------------------------------------------
   # Runs only if the release job is cancelled. Finds any in-progress or
