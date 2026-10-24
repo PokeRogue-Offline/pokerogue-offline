@@ -136,7 +136,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           CSC_LINK: ''
           WIN_CSC_LINK: ''
-        run: pnpm electron-builder --win portable --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
+        run: pnpm electron-builder --win portable --publish never --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
 
       - name: Rename and save EXE
         id: exe_path

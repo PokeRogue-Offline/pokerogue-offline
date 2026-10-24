@@ -121,7 +121,7 @@ jobs:
         working-directory: pokerogue-src
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: pnpm electron-builder --linux AppImage --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
+        run: pnpm electron-builder --linux AppImage --publish never --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
 
       - name: Rename and save AppImage
         id: appimage_path
