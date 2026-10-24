@@ -1,0 +1,41 @@
+name: Get PokeRogue version
+description: >-
+  Optionally overrides pokerogue-src/package.json's version field, then
+  reads back the resulting version. Used by all 5 build workflows so the
+  version_override input behaves identically everywhere.
+inputs:
+  version-override:
+    description: 'Override version (e.g. 1.12.0.0). Must look like #.#.#[.#]. Leave blank for no override.'
+    required: false
+    default: ''
+  package-json-path:
+    description: 'Path to the package.json to read/patch'
+    required: false
+    default: 'pokerogue-src/package.json'
+outputs:
+  version:
+    description: 'The resulting version string (after optional override)'
+    value: ${{ steps.version.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      env:
+        VERSION_OVERRIDE: ${{ inputs.version-override }}
+        PKG: ${{ inputs.package-json-path }}
+      run: |
+        if [ -n "$VERSION_OVERRIDE" ]; then
+          if ! [[ "$VERSION_OVERRIDE" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "ERROR: version_override '$VERSION_OVERRIDE' must look like #.#.#[.#]" >&2
+            exit 1
+          fi
+          node -e "
+            const fs = require('fs');
+            const pkg = require('./$PKG');
+            pkg.version = process.env.VERSION_OVERRIDE;
+            fs.writeFileSync('./$PKG', JSON.stringify(pkg, null, 2) + '\n');
+          "
+        fi
+        VERSION=$(node -p "require('./$PKG').version")
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"

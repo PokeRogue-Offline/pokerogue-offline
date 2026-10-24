@@ -23,7 +23,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -46,54 +46,44 @@ jobs:
 
       - name: Get PokeRogue version
         id: pokerogue_version
-        env:
-          VERSION_OVERRIDE: ${{ inputs.version_override }}
-        run: |
-          if [ -n "$VERSION_OVERRIDE" ]; then
-            if ! [[ "$VERSION_OVERRIDE" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-              echo "ERROR: version_override '$VERSION_OVERRIDE' must look like #.#.#[.#]" >&2
-              exit 1
-            fi
-            node -e "
-              const fs = require('fs');
-              const pkg = require('./pokerogue-src/package.json');
-              pkg.version = process.env.VERSION_OVERRIDE;
-              fs.writeFileSync('./pokerogue-src/package.json', JSON.stringify(pkg, null, 2) + '\n');
-            "
-          fi
-          VERSION=$(node -p "require('./pokerogue-src/package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        uses: ./.github/actions/get-pokerogue-version
+        with:
+          version-override: ${{ inputs.version_override }}
 
       - name: Apply patches
         run: bash ${{ github.workspace }}/scripts/apply-patches.sh mobile
 
       - name: Inject build number into banner
+        uses: ./.github/actions/inject-build-number-banner
+        with:
+          build-number: ${{ inputs.build_number || github.run_number }}
+          dev: ${{ inputs.dev }}
+
+      - name: Inject Scooom-dev banner suffix
+        if: ${{ inputs.dev == 'true' }}
         run: |
-          BUILD_NUM=${{ inputs.build_number || github.run_number }}
-          if [ "${{ inputs.dev }}" = "true" ]; then
-            sed -i '' "s/BUILD_NUMBER_PLACEHOLDER/${BUILD_NUM} DEV/g" pokerogue-src/src/ui/handlers/title-ui-handler.ts
-            sed -i '' "s/Unofficial Offline Client (Scooom)/Unofficial Offline Client (Scooom) Dev/" pokerogue-src/src/ui/handlers/title-ui-handler.ts
-          else
-            sed -i '' "s/BUILD_NUMBER_PLACEHOLDER/${BUILD_NUM}/g" pokerogue-src/src/ui/handlers/title-ui-handler.ts
-          fi
+          source ${{ github.workspace }}/scripts/sed-lib.sh
+          FILE=pokerogue-src/src/ui/handlers/title-ui-handler.ts
+          assert_sed "$FILE" "Unofficial Offline Client (Scooom)"
+          sed -i '' "s/Unofficial Offline Client (Scooom)/Unofficial Offline Client (Scooom) Dev/" "$FILE"
 
       - name: Inject Google iOS Client ID
         run: |
+          source ${{ github.workspace }}/scripts/sed-lib.sh
+          FILE=pokerogue-src/src/system/offline/google-drive-backup.ts
+          assert_sed "$FILE" IOS_CLIENT_ID_PLACEHOLDER
           if [ "${{ inputs.dev }}" = "true" ]; then
-            sed -i '' "s/IOS_CLIENT_ID_PLACEHOLDER/856587427302-k9ns6u546mgn6vjv1mcks32mn76u1v01.apps.googleusercontent.com/g" pokerogue-src/src/system/offline/google-drive-backup.ts
+            sed -i '' "s/IOS_CLIENT_ID_PLACEHOLDER/856587427302-k9ns6u546mgn6vjv1mcks32mn76u1v01.apps.googleusercontent.com/g" "$FILE"
           else
-            sed -i '' "s/IOS_CLIENT_ID_PLACEHOLDER/856587427302-ejrsdp1qu750amcjupo943593vmeje1k.apps.googleusercontent.com/g" pokerogue-src/src/system/offline/google-drive-backup.ts
+            sed -i '' "s/IOS_CLIENT_ID_PLACEHOLDER/856587427302-ejrsdp1qu750amcjupo943593vmeje1k.apps.googleusercontent.com/g" "$FILE"
           fi
 
       - name: Inject Dropbox App Key and redirect URI
-        run: |
-          if [ "${{ inputs.dev }}" = "true" ]; then
-            sed -i '' "s/DROPBOX_APP_KEY_PLACEHOLDER/${{ secrets.DROPBOX_APP_KEY_DEV }}/g" pokerogue-src/src/system/offline/dropbox-backup.ts
-            sed -i '' "s#DROPBOX_REDIRECT_URI_PLACEHOLDER#xyz.scooom.pkrdev://dropbox-auth-callback#g" pokerogue-src/src/system/offline/dropbox-backup.ts
-          else
-            sed -i '' "s/DROPBOX_APP_KEY_PLACEHOLDER/${{ secrets.DROPBOX_APP_KEY }}/g" pokerogue-src/src/system/offline/dropbox-backup.ts
-            sed -i '' "s#DROPBOX_REDIRECT_URI_PLACEHOLDER#xyz.scooom.pkr://dropbox-auth-callback#g" pokerogue-src/src/system/offline/dropbox-backup.ts
-          fi
+        uses: ./.github/actions/inject-dropbox-app-key
+        with:
+          target-file: pokerogue-src/src/system/offline/dropbox-backup.ts
+          dropbox-app-key: ${{ inputs.dev == 'true' && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
+          redirect-uri: ${{ inputs.dev == 'true' && 'xyz.scooom.pkrdev://dropbox-auth-callback' || 'xyz.scooom.pkr://dropbox-auth-callback' }}
 
       - name: Install PokeRogue dependencies
         working-directory: pokerogue-src
@@ -115,12 +105,9 @@ jobs:
           cat capacitor.config.json
 
       - name: Inject Scooom dev-build flag
-        run: |
-          # scooom-dev.ts only exists if prune-stale-pokemon-assets.js ran (it's
-          # skippable via apply-patches.sh's MEMORY_PATCHES_ENABLED kill-switch).
-          if [ "${{ inputs.dev }}" = "true" ] && [ -f pokerogue-src/src/system/offline/scooom-dev.ts ]; then
-            sed -i '' "s/export const isScoomDev = false;/export const isScoomDev = true;/" pokerogue-src/src/system/offline/scooom-dev.ts
-          fi
+        uses: ./.github/actions/inject-scooom-dev-flag
+        with:
+          dev: ${{ inputs.dev }}
 
       - name: Build PokeRogue
         working-directory: pokerogue-src

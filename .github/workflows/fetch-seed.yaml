@@ -2,11 +2,20 @@ name: Fetch Daily Seed
 
 on:
   workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Daily seed value. Fetched over HTTPS from api.pokerogue.net by the VPS cron job and passed in here directly — this workflow no longer fetches it itself over HTTP.'
+        required: true
+        type: string
     # Scheduled daily runs are triggered externally via a VPS cron job.
     # Do not add a schedule: trigger here.
 
 permissions:
   contents: write
+
+concurrency:
+  group: seed-branch-write
+  cancel-in-progress: false
 
 jobs:
   fetch:
@@ -17,21 +26,36 @@ jobs:
         with:
           ref: seed
 
-      - name: Fetch daily seed
+      - name: Validate and write daily seed
+        env:
+          SEED: ${{ inputs.seed }}
         run: |
-          SEED=$(curl -sf \
-            -H "Origin: https://pokerogue.net" \
-            -H "Referer: https://pokerogue.net/" \
-            "http://ssh.scooom.xyz/daily-seed.txt")
-          echo "Seed Fetched: $SEED";
-
           if [ -z "$SEED" ]; then
-            echo "ERROR: Failed to fetch daily seed."
+            echo "ERROR: seed input was empty."
+            exit 1
+          fi
+
+          # Upstream curates daily seeds as either a plain base64(-url) string,
+          # or a JSON string/object for the more involved curated-event seeds
+          # - no fixed length or charset is safe to assume otherwise (it's a
+          # text column upstream, previously varchar(255), changed after
+          # hitting that limit). Accept either shape. A charset check rather
+          # than an actual `base64 -d` decode attempt deliberately, since GNU
+          # base64 enforces 4-char block padding and would wrongly reject a
+          # legitimate unpadded/odd-length token - this only needs to catch
+          # obviously-wrong input (e.g. an HTML error page landing in $SEED),
+          # not validate real base64-ness.
+          if [[ "$SEED" =~ ^[A-Za-z0-9+/_-]+={0,2}$ ]]; then
+            echo "Seed is base64(-url)-shaped."
+          elif printf '%s' "$SEED" | jq -e . >/dev/null 2>&1; then
+            echo "Seed is valid JSON."
+          else
+            echo "ERROR: seed is neither base64(-url)-shaped nor valid JSON."
             exit 1
           fi
 
           echo -n "$SEED" > docs/daily-seed.txt
-          echo "Fetched seed: $SEED"
+          echo "Wrote seed: $SEED"
 
       - name: Commit updated seed
         run: |

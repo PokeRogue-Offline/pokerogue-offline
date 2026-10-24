@@ -1,0 +1,34 @@
+name: Inject Dropbox app key
+description: >-
+  Substitutes DROPBOX_APP_KEY_PLACEHOLDER with the given (already
+  dev-vs-prod-resolved) secret value. If redirect-uri is non-empty, also
+  substitutes DROPBOX_REDIRECT_URI_PLACEHOLDER with that literal value -
+  mobile builds (Android/iOS) need this; desktop builds (main.cjs) have a
+  fixed loopback redirect already hardcoded and pass nothing here.
+inputs:
+  target-file:
+    description: 'File containing the placeholder(s)'
+    required: true
+  dropbox-app-key:
+    description: 'Resolved Dropbox app key (caller selects dev vs prod secret)'
+    required: true
+  redirect-uri:
+    description: 'Resolved OAuth redirect URI literal. Leave blank to skip (desktop).'
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FILE: ${{ inputs.target-file }}
+        DROPBOX_APP_KEY: ${{ inputs.dropbox-app-key }}
+        REDIRECT_URI: ${{ inputs.redirect-uri }}
+      run: |
+        source "${{ github.workspace }}/scripts/sed-lib.sh"
+        assert_sed "$FILE" DROPBOX_APP_KEY_PLACEHOLDER
+        portable_sed_i "s/DROPBOX_APP_KEY_PLACEHOLDER/$(sed_escape "$DROPBOX_APP_KEY")/g" "$FILE"
+        if [ -n "$REDIRECT_URI" ]; then
+          assert_sed "$FILE" DROPBOX_REDIRECT_URI_PLACEHOLDER
+          portable_sed_i "s#DROPBOX_REDIRECT_URI_PLACEHOLDER#${REDIRECT_URI}#g" "$FILE"
+        fi

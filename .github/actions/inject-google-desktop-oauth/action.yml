@@ -1,0 +1,30 @@
+name: Inject Google desktop OAuth credentials
+description: >-
+  Substitutes the Google desktop OAuth client ID/secret placeholders into
+  main.cjs. Unconditional - no dev/prod variant exists for the desktop
+  Google client. Used by the 3 desktop (Electron) build workflows.
+inputs:
+  target-file:
+    description: 'File containing the placeholders'
+    required: false
+    default: 'pokerogue-src/main.cjs'
+  client-id:
+    description: 'Google desktop OAuth client ID'
+    required: true
+  client-secret:
+    description: 'Google desktop OAuth client secret'
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FILE: ${{ inputs.target-file }}
+        GOOGLE_DESKTOP_CLIENT_ID: ${{ inputs.client-id }}
+        GOOGLE_DESKTOP_CLIENT_SECRET: ${{ inputs.client-secret }}
+      run: |
+        source "${{ github.workspace }}/scripts/sed-lib.sh"
+        assert_sed "$FILE" GOOGLE_DESKTOP_CLIENT_ID_PLACEHOLDER
+        assert_sed "$FILE" GOOGLE_DESKTOP_CLIENT_SECRET_PLACEHOLDER
+        portable_sed_i "s/GOOGLE_DESKTOP_CLIENT_ID_PLACEHOLDER/$(sed_escape "$GOOGLE_DESKTOP_CLIENT_ID")/g" "$FILE"
+        portable_sed_i "s/GOOGLE_DESKTOP_CLIENT_SECRET_PLACEHOLDER/$(sed_escape "$GOOGLE_DESKTOP_CLIENT_SECRET")/g" "$FILE"

@@ -1,0 +1,29 @@
+name: Get 3-num Electron package version
+description: >-
+  electron-builder's --config.extraMetadata.version needs a plain
+  dotted-numeric version. Rewrites package.json's "X.Y.Z.W" version into
+  "X.Y.Z-W" (valid semver-ish), then re-derives "X.Y.ZW" via jq. Used by
+  the 3 desktop (Electron) build workflows - this is their actual shipped
+  version, independent of get-pokerogue-version's output.
+inputs:
+  package-json-path:
+    description: 'Path to the package.json to rewrite/read'
+    required: false
+    default: 'pokerogue-src/package.json'
+outputs:
+  version:
+    description: 'The resulting 3-num-plus-build version string'
+    value: ${{ steps.old_ver.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: old_ver
+      shell: bash
+      env:
+        PKG: ${{ inputs.package-json-path }}
+      run: |
+        source "${{ github.workspace }}/scripts/sed-lib.sh"
+        portable_sed_i -E 's/"version": "([0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)"/"version": "\1-\2"/' "$PKG"
+        VERSION=$(jq -r '.version | sub("(?<v>[0-9]+\\.[0-9]+\\.[0-9]+)\\-(?<h>[0-9]+)"; .v + .h)' "$PKG")
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "Detected Version: '$VERSION'"

@@ -23,7 +23,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -46,40 +46,18 @@ jobs:
 
       - name: Get PokeRogue version
         id: pokerogue_version
-        env:
-          VERSION_OVERRIDE: ${{ inputs.version_override }}
-        run: |
-          if [ -n "$VERSION_OVERRIDE" ]; then
-            if ! [[ "$VERSION_OVERRIDE" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-              echo "ERROR: version_override '$VERSION_OVERRIDE' must look like #.#.#[.#]" >&2
-              exit 1
-            fi
-            node -e "
-              const fs = require('fs');
-              const pkg = require('./pokerogue-src/package.json');
-              pkg.version = process.env.VERSION_OVERRIDE;
-              fs.writeFileSync('./pokerogue-src/package.json', JSON.stringify(pkg, null, 2) + '\n');
-            "
-          fi
-          VERSION=$(node -p "require('./pokerogue-src/package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Download full unlocks save file
-        run: |
-          curl -L https://raw.githubusercontent.com/pagefaultgames/pokerogue/beta/test/utils/saves/full_unlocks_sanitized.prsv \
-            -o pokerogue-src/full_unlocks.prsv
+        uses: ./.github/actions/get-pokerogue-version
+        with:
+          version-override: ${{ inputs.version_override }}
 
       - name: Apply patches
         run: bash ${{ github.workspace }}/scripts/apply-patches.sh appimage
 
       - name: Inject build number into banner
-        run: |
-          BUILD_NUM=${{ inputs.build_number || github.run_number }}
-          if [ "${{ inputs.dev }}" = "true" ]; then
-            sed -i "s/BUILD_NUMBER_PLACEHOLDER/${BUILD_NUM} DEV/g" pokerogue-src/src/ui/handlers/title-ui-handler.ts
-          else
-            sed -i "s/BUILD_NUMBER_PLACEHOLDER/${BUILD_NUM}/g" pokerogue-src/src/ui/handlers/title-ui-handler.ts
-          fi
+        uses: ./.github/actions/inject-build-number-banner
+        with:
+          build-number: ${{ inputs.build_number || github.run_number }}
+          dev: ${{ inputs.dev }}
 
       - name: Install PokeRogue dependencies
         working-directory: pokerogue-src
@@ -100,12 +78,9 @@ jobs:
         run: pnpm add @capacitor/core@8.4.1 @capgo/capacitor-social-login@8.3.33
 
       - name: Inject Scooom dev-build flag
-        run: |
-          # scooom-dev.ts only exists if prune-stale-pokemon-assets.js ran (it's
-          # skippable via apply-patches.sh's MEMORY_PATCHES_ENABLED kill-switch).
-          if [ "${{ inputs.dev }}" = "true" ] && [ -f pokerogue-src/src/system/offline/scooom-dev.ts ]; then
-            sed -i "s/export const isScoomDev = false;/export const isScoomDev = true;/" pokerogue-src/src/system/offline/scooom-dev.ts
-          fi
+        uses: ./.github/actions/inject-scooom-dev-flag
+        with:
+          dev: ${{ inputs.dev }}
 
       - name: Build PokeRogue
         working-directory: pokerogue-src
@@ -122,47 +97,30 @@ jobs:
           cp ${{ github.workspace }}/configs/desktop/electron/preload.cjs pokerogue-src/preload.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/electron-builder.appimage.json pokerogue-src/electron-builder.json
           cp ${{ github.workspace }}/docs/appIcon.png pokerogue-src/appIcon.png
-          cp pokerogue-src/full_unlocks.prsv pokerogue-src/dist/full_unlocks.prsv
 
       - name: Inject Google OAuth credentials into main.cjs
-        run: |
-          sed -i "s/GOOGLE_DESKTOP_CLIENT_ID_PLACEHOLDER/${{ secrets.GOOGLE_DESKTOP_CLIENT_ID }}/g" pokerogue-src/main.cjs
-          sed -i "s/GOOGLE_DESKTOP_CLIENT_SECRET_PLACEHOLDER/${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}/g" pokerogue-src/main.cjs
+        uses: ./.github/actions/inject-google-desktop-oauth
+        with:
+          client-id: ${{ secrets.GOOGLE_DESKTOP_CLIENT_ID }}
+          client-secret: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
 
       - name: Inject Dropbox App Key
-        run: |
-          if [ "${{ inputs.dev }}" = "true" ]; then
-            sed -i "s/DROPBOX_APP_KEY_PLACEHOLDER/${{ secrets.DROPBOX_APP_KEY_DEV }}/g" pokerogue-src/main.cjs
-          else
-            sed -i "s/DROPBOX_APP_KEY_PLACEHOLDER/${{ secrets.DROPBOX_APP_KEY }}/g" pokerogue-src/main.cjs
-          fi
+        uses: ./.github/actions/inject-dropbox-app-key
+        with:
+          target-file: pokerogue-src/main.cjs
+          dropbox-app-key: ${{ inputs.dev == 'true' && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
 
       - name: Set electron main in package.json
-        working-directory: pokerogue-src
-        run: |
-          node -e "
-            const pkg = require('./package.json');
-            if (!pkg.description) pkg.description = 'PokeRogue Offline';
-            if (!pkg.author) pkg.author = 'Scooom';
-            pkg.main = 'main.cjs';
-            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2));
-          "
+        uses: ./.github/actions/set-electron-package-metadata
+
       - name: Get 3 Num Version
         id: old_ver
-        working-directory: pokerogue-src
-        shell: bash
-        run: |
-          sed -i -E 's/"version": "([0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)"/"version": "\1-\2"/' package.json
-          VERSION=$(jq -r '.version | sub("(?<v>[0-9]+\\.[0-9]+\\.[0-9]+)\\-(?<h>[0-9]+)"; .v + .h)' package.json)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Detected Version: '$VERSION'"
-
+        uses: ./.github/actions/get-electron-package-version
 
       - name: Generate AppImage
         working-directory: pokerogue-src
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm electron-builder --linux AppImage --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
 
       - name: Rename and save AppImage
