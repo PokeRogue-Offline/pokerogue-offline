@@ -32,6 +32,9 @@ apply_patch "app-settings-menu.js"            all
 if [[ "$MEMORY_PATCHES_ENABLED" == "true" ]]; then
   apply_patch "prune-stale-pokemon-assets.js" all
 fi
+# Stopgap for pagefaultgames/pokerogue#7819 (closed, deferred to the Phaser 4
+# rewrite). Remove this line once that rewrite ships the fix upstream.
+apply_patch "fix-stat-change-sprite-leak.js"  all
 apply_patch "touch-overlay-idle-opacity.js"   all
 apply_patch "damage-preview.js"               all
 apply_patch "auto-drive-sync.js"              all
