@@ -42,10 +42,11 @@
  * Token model: on Electron, main.cjs requests offline access and persists a
  * refresh token (encrypted via Electron's safeStorage where available) so
  * the connection survives app restarts — see main.cjs for the full
- * explanation. On Capacitor, the native Google Sign-In SDKs typically
- * persist sign-in state on-device themselves; whether that means no extra
- * work is needed here or whether an explicit "restore previous sign-in"
- * call is required has NOT been verified yet — flagged below.
+ * explanation. On Capacitor, the native Google Sign-In SDKs persist
+ * sign-in state on-device themselves (Keychain on iOS); `tryRestoreSession()`
+ * surfaces that via the plugin's `getAuthorizationCode()` call, confirmed
+ * against the actual pinned plugin version's (`@capgo/capacitor-social-login
+ * @8.3.33`) iOS source — see that method's doc comment below for specifics.
  *
  * NOTE: This module has not been exercised against a live Drive account or a
  * real device/build yet. The request shapes follow Drive API v3's documented
@@ -78,15 +79,57 @@ export class GoogleDriveProvider implements BackupProvider {
   }
 
   /**
+   * Shared `SocialLogin.initialize()` call for the Google provider — needed
+   * before any `@capgo/capacitor-social-login` call (login, restore,
+   * sign-out) in a fresh JS context. `authenticate()` already called this
+   * unconditionally before every `login()`, which confirms it's safe/cheap
+   * to call repeatedly rather than needing to be guarded as "once per app".
+   */
+  private async initGoogleSocialLogin(): Promise<void> {
+    // @capgo/capacitor-social-login — NOT @codetrix-studio/capacitor-google-auth.
+    // The codetrix plugin is effectively unmaintained (peer dep capped at
+    // Capacitor 6; this project pins Capacitor 8), so this fork is used
+    // instead. API shape is meaningfully different — see the plan doc and
+    // https://capgo.app/docs/plugins/social-login/google/android/
+    const { SocialLogin } = await import("@capgo/capacitor-social-login");
+    await SocialLogin.initialize({
+      google: {
+        // webClientId is intentionally used here even though we're on a
+        // native platform — see capacitor.config.json comments; this is a
+        // "Web application" type client used purely as the token audience.
+        webClientId: "856587427302-iffda5uuavbg9ft4eo4f5c93fmu46kqg.apps.googleusercontent.com",
+        // REQUIRED on iOS specifically — without this, SocialLogin.login()
+        // throws "No provider was initialized" on iOS even though the exact
+        // same call works fine on Android with only webClientId set. Harmless
+        // to include on Android too, so it's set unconditionally here rather
+        // than branching on platform.
+        //
+        // This value is DIFFERENT for the prod (xyz.scooom.pkr) vs dev
+        // (xyz.scooom.pkrdev) iOS builds, since Google's iOS OAuth clients are
+        // bundle-ID-locked — substituted at build time via sed, sourced from
+        // GOOGLE_IOS_CLIENT_ID / GOOGLE_IOS_DEV_CLIENT_ID secrets. Android
+        // ignores this field entirely, so it gets the prod value there too —
+        // doesn't matter functionally, just keeps one substitution convention.
+        iOSClientId: "IOS_CLIENT_ID_PLACEHOLDER",
+        iOSServerClientId: "856587427302-iffda5uuavbg9ft4eo4f5c93fmu46kqg.apps.googleusercontent.com",
+        mode: "online", // plain access token, not the server-auth-code/offline flow
+      },
+    });
+  }
+
+  /**
    * Attempts to silently restore a connection from a previous session,
    * without prompting the user. Safe to call on every screen open — on
    * Electron this hits the fast/no-browser-popup path in main.cjs when a
    * stored refresh token exists, and does nothing if one doesn't.
    *
-   * On Capacitor: NOT YET IMPLEMENTED. The native SDKs likely handle this
-   * automatically or via their own "restore previous sign-in" call, but that
-   * hasn't been confirmed against the actual plugin. Always returns false
-   * here for now rather than guessing at an API call that might not exist.
+   * On Capacitor: the native Google Sign-In SDK (GIDSignIn on iOS, Credential
+   * Manager on Android) persists sign-in state on-device itself, surfaced
+   * through the plugin's `getAuthorizationCode()` call — it transparently
+   * restores the previous session and refreshes the token if one exists, or
+   * rejects if there's nothing to restore. Confirmed against the actual
+   * pinned plugin version's (`@capgo/capacitor-social-login@8.3.33`) iOS
+   * source rather than assumed.
    */
   async tryRestoreSession(): Promise<boolean> {
     if (this.cachedAccessToken) {
@@ -107,50 +150,50 @@ export class GoogleDriveProvider implements BackupProvider {
       }
     }
 
+    if (isCapacitor()) {
+      return this.refreshFromCapacitor();
+    }
+
     return false;
   }
 
-  /** Forgets the current connection, on Electron also deleting the stored refresh token. */
+  private async refreshFromCapacitor(): Promise<boolean> {
+    try {
+      await this.initGoogleSocialLogin();
+      const { SocialLogin } = await import("@capgo/capacitor-social-login");
+      const result = await SocialLogin.getAuthorizationCode({ provider: "google" });
+      if (!result?.accessToken) {
+        return false;
+      }
+      this.cachedAccessToken = result.accessToken;
+      return true;
+    } catch (err) {
+      console.warn("Silent Google session restore failed:", err);
+      return false;
+    }
+  }
+
+  /** Forgets the current connection, also clearing the native/stored session on Electron and Capacitor. */
   async signOut(): Promise<void> {
     this.cachedAccessToken = null;
     if (isElectron()) {
       await window.pkrOffline!.googleSignOut();
+    } else if (isCapacitor()) {
+      try {
+        await this.initGoogleSocialLogin();
+        const { SocialLogin } = await import("@capgo/capacitor-social-login");
+        await SocialLogin.logout({ provider: "google" });
+      } catch (err) {
+        console.warn("Google native sign-out failed:", err);
+      }
     }
-    // Capacitor sign-out not implemented yet — same caveat as tryRestoreSession.
   }
 
   /** Signs the user into Google, scoped to drive.appdata only, and caches the resulting access token. */
   async authenticate(): Promise<void> {
     if (isCapacitor()) {
-      // @capgo/capacitor-social-login — NOT @codetrix-studio/capacitor-google-auth.
-      // The codetrix plugin is effectively unmaintained (peer dep capped at
-      // Capacitor 6; this project pins Capacitor 8), so this fork is used
-      // instead. API shape is meaningfully different — see the plan doc and
-      // https://capgo.app/docs/plugins/social-login/google/android/
+      await this.initGoogleSocialLogin();
       const { SocialLogin } = await import("@capgo/capacitor-social-login");
-      await SocialLogin.initialize({
-        google: {
-          // webClientId is intentionally used here even though we're on a
-          // native platform — see capacitor.config.json comments; this is a
-          // "Web application" type client used purely as the token audience.
-          webClientId: "856587427302-iffda5uuavbg9ft4eo4f5c93fmu46kqg.apps.googleusercontent.com",
-          // REQUIRED on iOS specifically — without this, SocialLogin.login()
-          // throws "No provider was initialized" on iOS even though the exact
-          // same call works fine on Android with only webClientId set. Harmless
-          // to include on Android too, so it's set unconditionally here rather
-          // than branching on platform.
-          //
-          // This value is DIFFERENT for the prod (xyz.scooom.pkr) vs dev
-          // (xyz.scooom.pkrdev) iOS builds, since Google's iOS OAuth clients are
-          // bundle-ID-locked — substituted at build time via sed, sourced from
-          // GOOGLE_IOS_CLIENT_ID / GOOGLE_IOS_DEV_CLIENT_ID secrets. Android
-          // ignores this field entirely, so it gets the prod value there too —
-          // doesn't matter functionally, just keeps one substitution convention.
-          iOSClientId: "IOS_CLIENT_ID_PLACEHOLDER",
-          iOSServerClientId: "856587427302-iffda5uuavbg9ft4eo4f5c93fmu46kqg.apps.googleusercontent.com",
-          mode: "online", // plain access token, not the server-auth-code/offline flow
-        },
-      });
       const res = await SocialLogin.login({
         provider: "google",
         options: { scopes: ["https://www.googleapis.com/auth/drive.appdata"] },
