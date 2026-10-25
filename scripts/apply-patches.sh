@@ -10,12 +10,13 @@ set -e
 PLATFORM="${1:-all}"
 
 # Kill-switch for the memory-usage project (prune-stale-pokemon-assets.js,
-# skip-legacy-ui-duplicate-textures.js). Set to "false" - either by editing
-# this line or by exporting MEMORY_PATCHES_ENABLED=false before running this
-# script - to skip both without deleting anything, e.g. if they're not ready
-# yet for a given upstream release. Leaves app-settings-menu.js's "Aggressive
-# Memory Saving" toggle row in place either way (harmless no-op UI row when
-# prune-stale-pokemon-assets.js itself is skipped).
+# prune-stale-move-anim-assets.js, skip-legacy-ui-duplicate-textures.js). Set
+# to "false" - either by editing this line or by exporting
+# MEMORY_PATCHES_ENABLED=false before running this script - to skip all three
+# without deleting anything, e.g. if they're not ready yet for a given
+# upstream release. Leaves app-settings-menu.js's "Aggressive Memory Saving"
+# toggle row in place either way (harmless no-op UI row when these patches
+# themselves are skipped).
 MEMORY_PATCHES_ENABLED="${MEMORY_PATCHES_ENABLED:-true}"
 
 source "$(dirname "$0")/patch-lib.sh"
@@ -31,6 +32,7 @@ apply_patch "update-title-labels.js"  all
 apply_patch "app-settings-menu.js"            all
 if [[ "$MEMORY_PATCHES_ENABLED" == "true" ]]; then
   apply_patch "prune-stale-pokemon-assets.js" all
+  apply_patch "prune-stale-move-anim-assets.js" all
 fi
 # Stopgap for pagefaultgames/pokerogue#7819 (closed, deferred to the Phaser 4
 # rewrite). Remove this line once that rewrite ships the fix upstream.

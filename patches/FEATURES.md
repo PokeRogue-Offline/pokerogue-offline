@@ -96,6 +96,17 @@ patch at the time they were written:
   (`settings.offline.aggressiveMemorySaving`, default on) added to
   `app-settings-menu.js`'s Preferences tab — depends on that patch having
   already run, same as `damage-preview.js`'s settings.
+- `patches/all/node/prune-stale-move-anim-assets.js` — sibling fix for move
+  animations (issue #11 idea #2, reported/prototyped by @mleo2003): frees
+  `loadMoveAnimAssets()`'s spritesheets/backgrounds/`battle_anims/*` sound
+  buffers once no Pokemon on either side still knows that move, plus a
+  one-shot `sound.sounds` sweep for sounds Phaser never destroys because
+  they were stopped/interrupted before firing `COMPLETE`. Same
+  `aggressiveMemorySaving` gate, added as `BattleScene.pruneMoveAnimAssets()`
+  right next to `pruneStaleAssets()` — **not independent** of
+  `prune-stale-pokemon-assets.js`: it anchors on code that patch introduces,
+  so `apply-patches.sh` runs it immediately after, inside the same
+  `MEMORY_PATCHES_ENABLED` block.
 - `patches/mobile/node/skip-legacy-ui-duplicate-textures.js` — unrelated,
   smaller fix: stops unconditionally loading a duplicate `_legacy` copy of
   every UI texture/spritesheet/atlas at boot unless the player has actually
@@ -151,7 +162,12 @@ other), not improve it:
 - `src/battle-scene.ts`: `app-settings-menu.js` (Touch Button Opacity
   live-apply listener) and `patches/all/node/prune-stale-pokemon-assets.js`
   (sprite/cry tracking + eviction) — unrelated concerns, non-overlapping
-  anchors.
+  anchors. `patches/all/node/prune-stale-move-anim-assets.js` also touches
+  this file, but is NOT independent of `prune-stale-pokemon-assets.js` here —
+  see "Memory usage" above.
+- `src/phases/new-battle-phase.ts`: `prune-stale-pokemon-assets.js` (adds the
+  `pruneStaleAssets()` call) and `prune-stale-move-anim-assets.js` (adds
+  `pruneMoveAnimAssets()` right after it) — same dependency, not independent.
 - `src/scene-base.ts`: `patches/mobile/node/skip-legacy-ui-duplicate-
   textures.js` and `patches/android/node/fix-android-image-paths.js` — see
   "Memory usage" above for the ordering dependency between them (not
