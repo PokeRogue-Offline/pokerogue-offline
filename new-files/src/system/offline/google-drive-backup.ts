@@ -161,6 +161,28 @@ export class GoogleDriveProvider implements BackupProvider {
     try {
       await this.initGoogleSocialLogin();
       const { SocialLogin } = await import("@capgo/capacitor-social-login");
+
+      // Try `refresh()` first. On Android, `getAuthorizationCode()` alone
+      // does NOT refresh an expired cached access token — it validates it,
+      // and on an invalid/expired token calls `rawLogout()`, which wipes the
+      // stored session (SharedPreferences + credential state) and rejects.
+      // Since Google access tokens are short-lived (~1hr) while app
+      // relaunches happen far less often, hitting `getAuthorizationCode()`
+      // first would routinely nuke an otherwise-restorable session. `refresh()`
+      // instead silently re-authorizes via Android's Credential Manager
+      // (`setFilterByAuthorizedAccounts(true)`, no UI) when the account is
+      // still authorized on-device, with no destructive side effect if it
+      // fails. On iOS, `refresh()` requires `currentUser` to already be set,
+      // which it isn't yet on a cold launch, so this call just fails fast and
+      // harmlessly there — the real iOS restore happens inside
+      // `getAuthorizationCode()` below via its own `restorePreviousSignIn`.
+      try {
+        await SocialLogin.refresh({ provider: "google", options: {} });
+      } catch {
+        // Expected/harmless on iOS cold launch and on Android when there's
+        // nothing to refresh — getAuthorizationCode() below is the real check.
+      }
+
       const result = await SocialLogin.getAuthorizationCode({ provider: "google" });
       if (!result?.accessToken) {
         return false;
