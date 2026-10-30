@@ -17,7 +17,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          gh workflow run create-release.yaml --repo ${{ github.repository }} --ref main \
+          gh workflow run create-release.yaml --repo ${{ github.repository }} --ref "${{ github.ref_name }}" \
             -f dev=true \
             -f branch=beta \
             -f notify=false
