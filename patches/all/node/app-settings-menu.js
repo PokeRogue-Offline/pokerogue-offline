@@ -439,6 +439,7 @@ if (typesSrc.includes("OfflineSettings")) {
       `  enemyHpPercent: boolean;\n` +
       `  touchOverlayOpacity: number;\n` +
       `  aggressiveMemorySaving: boolean;\n` +
+      `  discordRichPresence: boolean;\n` +
       `}\n\n` +
       `/** All keys for the offline settings */\n` +
       `export type OfflineSettingsKey = keyof OfflineSettings;`,
@@ -517,6 +518,7 @@ if (defaultsSrc.includes("defaultOfflineSettings")) {
       `  enemyHpPercent: false,\n` +
       `  touchOverlayOpacity: 0.8, // matches the previous hardcoded idle opacity\n` +
       `  aggressiveMemorySaving: true, // prune-stale-pokemon-assets.js kill-switch\n` +
+      `  discordRichPresence: true, // on by default - update-check.js reads this directly, no live-listener wiring needed\n` +
       `};\n` +
       `\n` +
       `export const defaultSettings: UserFacingSettings = {\n` +
@@ -709,6 +711,14 @@ if (uiItemsSrc.includes("offlineBackupUiItems")) {
       `    // reload correctly, no new build required.\n` +
       `    key: "aggressiveMemorySaving",\n` +
       `    label: "Aggressive Memory Saving",\n` +
+      `    options: useOnOffOptions(),\n` +
+      `  },\n` +
+      `  {\n` +
+      `    // Electron-only - read directly from this setting (not a live\n` +
+      `    // listener) by update-check.js's polling interval, which pushes it to\n` +
+      `    // discord-rpc.cjs. No-op on the web build.\n` +
+      `    key: "discordRichPresence",\n` +
+      `    label: "Discord Rich Presence",\n` +
       `    options: useOnOffOptions(),\n` +
       `  },\n` +
       `];\n` +

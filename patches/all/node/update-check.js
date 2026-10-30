@@ -29,6 +29,12 @@
  * there's nothing to show so it can pop a native dialog). No-ops entirely
  * outside Electron.
  *
+ * The same polling interval also drives Discord Rich Presence
+ * (configs/desktop/electron/discord-rpc.cjs): pushes the "Discord Rich
+ * Presence" setting's value (app-settings-menu.js) and the current run
+ * state (title screen / menus / in-battle run type + wave + lead Pokemon)
+ * to main.cjs whenever either changes.
+ *
  * Also adds a small "Update Available!" hint label under the version text.
  * This ALWAYS shows whenever an update is found, regardless of any setting,
  * and persists across return visits to the title screen within the same
@@ -183,11 +189,94 @@ const CONSTANTS_BLOCK =
   `  }\n` +
   `}\n` +
   `\n` +
+  `// update-check: mirrors updatePopUpsEnabled() above, for the "Discord\n` +
+  `// Rich Presence" Offline-settings toggle (app-settings-menu.js). Default\n` +
+  `// is on - absent key (never visited, or never changed) means on, not off.\n` +
+  `function discordRichPresenceEnabled(): boolean {\n` +
+  `  try {\n` +
+  `    const raw = localStorage.getItem("settings");\n` +
+  `    if (!raw) {\n` +
+  `      return true;\n` +
+  `    }\n` +
+  `    const parsed = JSON.parse(raw);\n` +
+  `    const value = parsed?.offline?.discordRichPresence;\n` +
+  `    return value === undefined ? true : value === true;\n` +
+  `  } catch {\n` +
+  `    return true;\n` +
+  `  }\n` +
+  `}\n` +
+  `\n` +
+  `// update-check: best-effort reads of pokerogue's own public run-state API\n` +
+  `// (globalScene.currentBattle.waveIndex and globalScene.getPlayerParty() are\n` +
+  `// both already used elsewhere in this fork's own patches - see\n` +
+  `// prune-stale-pokemon-assets.js / prune-stale-move-anim-assets.js. The\n` +
+  `// run-type label and lead-Pokemon-name lookups below are each wrapped in\n` +
+  `// their own fallback chain since those two specific accessors aren't\n` +
+  `// otherwise exercised by this fork - if neither matches upstream's actual\n` +
+  `// API, the fallback ("Unknown"/null) is what shows up, not a crash.\n` +
+  `function getRunTypeLabel(gameMode: any): string {\n` +
+  `  try {\n` +
+  `    if (typeof gameMode?.getName === "function") {\n` +
+  `      return gameMode.getName();\n` +
+  `    }\n` +
+  `  } catch {\n` +
+  `    // fall through to the boolean-flag guesses below\n` +
+  `  }\n` +
+  `  if (gameMode?.isClassic) {\n` +
+  `    return "Classic";\n` +
+  `  }\n` +
+  `  if (gameMode?.isDaily) {\n` +
+  `    return "Daily";\n` +
+  `  }\n` +
+  `  if (gameMode?.isEndless) {\n` +
+  `    return "Endless";\n` +
+  `  }\n` +
+  `  if (gameMode?.isChallenge) {\n` +
+  `    return "Challenge";\n` +
+  `  }\n` +
+  `  return "Unknown";\n` +
+  `}\n` +
+  `\n` +
+  `function getLeadPokemonName(pokemon: any): string | null {\n` +
+  `  try {\n` +
+  `    if (typeof pokemon?.getNameToRender === "function") {\n` +
+  `      return pokemon.getNameToRender();\n` +
+  `    }\n` +
+  `  } catch {\n` +
+  `    // fall through to the plain field reads below\n` +
+  `  }\n` +
+  `  return pokemon?.species?.name ?? pokemon?.name ?? null;\n` +
+  `}\n` +
+  `\n` +
+  `/** Returns null (no battle in progress) or the state shape discord-rpc.cjs's buildActivity() expects. Never throws - any read failure here just means presence doesn't update this tick, never a crashed run. */\n` +
+  `function computeDiscordPresenceState(isTitleScreen: boolean):\n` +
+  `  | { kind: "title" }\n` +
+  `  | { kind: "menu" }\n` +
+  `  | { kind: "battle"; runType: string; waveIndex: number; leadPokemon: string | null }\n` +
+  `  | null {\n` +
+  `  try {\n` +
+  `    if (isTitleScreen) {\n` +
+  `      return { kind: "title" };\n` +
+  `    }\n` +
+  `    const waveIndex = (globalScene as any)?.currentBattle?.waveIndex;\n` +
+  `    if (typeof waveIndex !== "number") {\n` +
+  `      return { kind: "menu" };\n` +
+  `    }\n` +
+  `    const runType = getRunTypeLabel((globalScene as any)?.gameMode);\n` +
+  `    const party = (globalScene as any)?.getPlayerParty?.();\n` +
+  `    const leadPokemon = Array.isArray(party) ? getLeadPokemonName(party[0]) : null;\n` +
+  `    return { kind: "battle", runType, waveIndex, leadPokemon };\n` +
+  `  } catch {\n` +
+  `    return null;\n` +
+  `  }\n` +
+  `}\n` +
+  `\n` +
   `// update-check: Electron Tools-menu integration (main.cjs's "Check for\n` +
-  `// Updates" item). Started once (guarded) from the very first show() call -\n` +
-  `// keeps running for the rest of the session regardless of how many times\n` +
-  `// the title screen is re-entered later. No-ops entirely outside Electron\n` +
-  `// (window.pkrOffline is undefined on the web build).\n` +
+  `// Updates" item) + Discord Rich Presence. Started once (guarded) from the\n` +
+  `// very first show() call - keeps running for the rest of the session\n` +
+  `// regardless of how many times the title screen is re-entered later.\n` +
+  `// No-ops entirely outside Electron (window.pkrOffline is undefined on the\n` +
+  `// web build).\n` +
   `let hasStartedElectronMenuHooks = false;\n` +
   `\n` +
   `function startElectronMenuHooksOnce(hintText: Phaser.GameObjects.Text): void {\n` +
@@ -202,12 +291,35 @@ const CONSTANTS_BLOCK =
   `  // active run. If getMode() ever stops matching this (e.g. renamed\n` +
   `  // upstream), isTitleScreen just stays falsy forever - the menu item\n` +
   `  // fails closed (permanently disabled), not open.\n` +
+  `  //\n` +
+  `  // The same 500ms tick also drives Discord Rich Presence: re-reads the\n` +
+  `  // "Discord Rich Presence" setting (pushed on every change, including\n` +
+  `  // once at boot with whatever was persisted - this is the only place\n` +
+  `  // that setting's initial value reaches main.cjs) and the current run\n` +
+  `  // state (pushed on every change too, so main.cjs isn't re-sent an\n` +
+  `  // identical activity 120 times a minute).\n` +
   `  let wasTitleScreen: boolean | null = null;\n` +
+  `  let wasDiscordEnabled: boolean | null = null;\n` +
+  `  let lastPresenceJson: string | null = null;\n` +
   `  setInterval(() => {\n` +
   `    const isTitleScreen = globalScene.ui?.getMode?.() === UiMode.TITLE;\n` +
   `    if (isTitleScreen !== wasTitleScreen) {\n` +
   `      wasTitleScreen = isTitleScreen;\n` +
   `      window.pkrOffline?.notifyTitleScreenState(isTitleScreen);\n` +
+  `    }\n` +
+  `\n` +
+  `    const discordEnabled = discordRichPresenceEnabled();\n` +
+  `    if (discordEnabled !== wasDiscordEnabled) {\n` +
+  `      wasDiscordEnabled = discordEnabled;\n` +
+  `      window.pkrOffline?.setDiscordRichPresenceEnabled(discordEnabled);\n` +
+  `    }\n` +
+  `    if (discordEnabled) {\n` +
+  `      const presence = computeDiscordPresenceState(isTitleScreen);\n` +
+  `      const presenceJson = JSON.stringify(presence);\n` +
+  `      if (presenceJson !== lastPresenceJson) {\n` +
+  `        lastPresenceJson = presenceJson;\n` +
+  `        window.pkrOffline?.updateDiscordPresence(presence);\n` +
+  `      }\n` +
   `    }\n` +
   `  }, 500);\n` +
   `\n` +

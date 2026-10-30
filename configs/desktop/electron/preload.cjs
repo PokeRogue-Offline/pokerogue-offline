@@ -53,4 +53,10 @@ contextBridge.exposeInMainWorld('pkrOffline', {
 
   /** Lets main.cjs show a native dialog for the cases the Update Available screen itself has nothing to display for. */
   reportUpdateCheckResult: result => ipcRenderer.send('updater-check-result', result),
+
+  /** Pushed on every change (edge-triggered) by the same title-ui-handler.ts polling interval that drives the Tools-menu title-screen check. */
+  updateDiscordPresence: state => ipcRenderer.send('discord-rpc-update-presence', state),
+
+  /** Pushed once at boot with the persisted setting, then again on every change - see discord-rpc.cjs. */
+  setDiscordRichPresenceEnabled: isEnabled => ipcRenderer.send('discord-rpc-set-enabled', isEnabled),
 });

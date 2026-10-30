@@ -67,6 +67,16 @@ declare global {
       notifyTitleScreenState: (isTitleScreen: boolean) => void;
       onCheckForUpdatesRequested: (callback: () => void) => void;
       reportUpdateCheckResult: (result: { status: "up-to-date" | "disabled" | "error" }) => void;
+      // Discord Rich Presence (configs/desktop/electron/discord-rpc.cjs) -
+      // see patches/all/node/update-check.js for the only consumer.
+      updateDiscordPresence: (
+        state:
+          | { kind: "title" }
+          | { kind: "menu" }
+          | { kind: "battle"; runType: string; waveIndex: number; leadPokemon: string | null }
+          | null,
+      ) => void;
+      setDiscordRichPresenceEnabled: (isEnabled: boolean) => void;
     };
   }
 }

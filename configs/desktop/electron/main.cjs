@@ -5,6 +5,7 @@ const http = require('http');
 const crypto = require('crypto');
 const https = require('https');
 const { registerUpdater } = require('./updater.cjs');
+const { registerDiscordRpc } = require('./discord-rpc.cjs');
 
 let mainWindow;
 
@@ -243,6 +244,7 @@ function createWindow() {
 
   buildAppMenu(mainWindow);
   registerUpdater(mainWindow);
+  registerDiscordRpc();
 }
 
 app.on('ready', createWindow);

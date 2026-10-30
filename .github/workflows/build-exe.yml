@@ -71,6 +71,12 @@ jobs:
         working-directory: pokerogue-src
         run: pnpm add -D electron@43.0.0 electron-builder@26.15.3
 
+      - name: Install Discord Rich Presence dependency
+        working-directory: pokerogue-src
+        # Not a devDependency - discord-rpc.cjs requires() this at runtime
+        # in the packaged app, so it needs to actually ship in node_modules.
+        run: pnpm add @xhayper/discord-rpc@1.5.1
+
       - name: Install Capacitor plugin stub for shared code resolution
         working-directory: pokerogue-src
         shell: bash
@@ -109,6 +115,7 @@ jobs:
           cp configs/desktop/electron/main.cjs pokerogue-src/main.cjs
           cp configs/desktop/electron/preload.cjs pokerogue-src/preload.cjs
           cp configs/desktop/electron/updater.cjs pokerogue-src/updater.cjs
+          cp configs/desktop/electron/discord-rpc.cjs pokerogue-src/discord-rpc.cjs
           cp configs/desktop/electron/electron-builder.windows.json pokerogue-src/electron-builder.json
           cp docs/appIcon.ico pokerogue-src/appIcon.ico
 
@@ -118,6 +125,12 @@ jobs:
           build-number: ${{ inputs.build_number || github.run_number }}
           dev: ${{ inputs.dev }}
           target-file: pokerogue-src/updater.cjs
+
+      - name: Inject Discord client ID into discord-rpc.cjs
+        uses: ./.github/actions/inject-discord-client-id
+        with:
+          target-file: pokerogue-src/discord-rpc.cjs
+          discord-client-id: ${{ secrets.DISCORD_CLIENT_ID }}
 
       - name: Inject Google OAuth credentials into main.cjs
         uses: ./.github/actions/inject-google-desktop-oauth

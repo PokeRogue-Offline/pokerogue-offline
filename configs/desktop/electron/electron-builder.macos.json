@@ -13,6 +13,7 @@
     "main.cjs",
     "preload.cjs",
     "updater.cjs",
+    "discord-rpc.cjs",
     "appIcon.icns",
     "node_modules/**/*"
   ]
