@@ -11,6 +11,7 @@
     "dist/**/*",
     "main.cjs",
     "preload.cjs",
+    "updater.cjs",
     "appIcon.ico",
     "node_modules/**/*"
   ]

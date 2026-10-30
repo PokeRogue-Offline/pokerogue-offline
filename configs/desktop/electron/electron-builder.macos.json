@@ -2,7 +2,7 @@
   "appId": "xyz.scooom.pkr",
   "productName": "PokeRogue Offline",
   "mac": {
-    "target": ["dmg"],
+    "target": ["dmg", "tar.gz"],
     "icon": "appIcon.icns",
     "identity": null,
     "hardenedRuntime": false,
@@ -12,6 +12,7 @@
     "dist/**/*",
     "main.cjs",
     "preload.cjs",
+    "updater.cjs",
     "appIcon.icns",
     "node_modules/**/*"
   ]

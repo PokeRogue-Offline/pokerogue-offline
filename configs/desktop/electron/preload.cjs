@@ -23,4 +23,22 @@ contextBridge.exposeInMainWorld('pkrOffline', {
   dropboxSignIn: () => ipcRenderer.invoke('dropbox-sign-in'),
   hasStoredDropboxCredentials: () => ipcRenderer.invoke('dropbox-has-stored-credentials'),
   dropboxSignOut: () => ipcRenderer.invoke('dropbox-sign-out'),
+
+  /** Self-updater (updater.cjs) — resolves to null when no update is available. */
+  checkForUpdate: () => ipcRenderer.invoke('updater-check'),
+
+  /** Downloads + checksum-verifies the applicable release asset for this platform. Progress via onUpdateProgress. */
+  downloadUpdate: () => ipcRenderer.invoke('updater-download'),
+
+  /** Aborts an in-flight downloadUpdate() call. */
+  cancelDownload: () => ipcRenderer.send('updater-cancel-download'),
+
+  /** Only one listener is ever needed at a time, so this replaces any previous one rather than stacking. */
+  onUpdateProgress: cb => {
+    ipcRenderer.removeAllListeners('updater-download-progress');
+    ipcRenderer.on('updater-download-progress', (_e, data) => cb(data));
+  },
+
+  /** Swaps the verified download into place and relaunches — only call after downloadUpdate() has resolved. */
+  applyUpdateAndRelaunch: () => ipcRenderer.invoke('updater-apply-and-relaunch'),
 });

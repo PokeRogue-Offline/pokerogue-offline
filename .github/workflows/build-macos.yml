@@ -122,8 +122,16 @@ jobs:
         run: |
           cp ${{ github.workspace }}/configs/desktop/electron/main.cjs pokerogue-src/main.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/preload.cjs pokerogue-src/preload.cjs
+          cp ${{ github.workspace }}/configs/desktop/electron/updater.cjs pokerogue-src/updater.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/electron-builder.macos.json pokerogue-src/electron-builder.json
           cp ${{ github.workspace }}/docs/appIcon.icns pokerogue-src/appIcon.icns
+
+      - name: Inject build number into updater.cjs
+        uses: ./.github/actions/inject-build-number-banner
+        with:
+          build-number: ${{ inputs.build_number || github.run_number }}
+          dev: ${{ inputs.dev }}
+          target-file: pokerogue-src/updater.cjs
 
       - name: Inject Google OAuth credentials into main.cjs
         uses: ./.github/actions/inject-google-desktop-oauth
@@ -144,11 +152,16 @@ jobs:
         id: old_ver
         uses: ./.github/actions/get-electron-package-version
 
-      - name: Generate macOS DMG
+      - name: Generate macOS DMG + app bundle tar.gz
         working-directory: pokerogue-src
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: pnpm electron-builder --mac dmg --${{ matrix.arch }} --publish never --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
+        # tar.gz is a second target alongside dmg, built in the same pass -
+        # it ships the raw .app bundle (no mounting), which is what the
+        # in-Electron self-updater downloads and swaps in directly (see
+        # configs/desktop/electron/updater.cjs); the dmg stays the normal
+        # first-install download.
+        run: pnpm electron-builder --mac dmg,tar.gz --${{ matrix.arch }} --publish never --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
 
       - name: Rename and save DMG
         id: dmg_path
@@ -167,4 +180,23 @@ jobs:
         with:
           name: PokeRogueOffline-macOS-${{ matrix.arch }}${{ inputs.dev && '-dev' || '' }}
           path: ${{ steps.dmg_path.outputs.dmg }}
+          retention-days: 30
+
+      - name: Rename and save app bundle tar.gz
+        id: tarball_path
+        run: |
+          FILE=$(find . -type f -name "*.tar.gz" | head -n1)
+          if [ "${{ inputs.dev }}" = "true" ]; then
+            OUTPUT="./PokeRogueOffline-dev-${{ matrix.arch }}.app.tar.gz"
+          else
+            OUTPUT="./PokeRogueOffline-${{ matrix.arch }}.app.tar.gz"
+          fi
+          mv "$FILE" "$OUTPUT"
+          echo "tarball=$OUTPUT" >> $GITHUB_OUTPUT
+
+      - name: Upload app bundle tar.gz artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokeRogueOffline-macOS-${{ matrix.arch }}-app${{ inputs.dev && '-dev' || '' }}
+          path: ${{ steps.tarball_path.outputs.tarball }}
           retention-days: 30

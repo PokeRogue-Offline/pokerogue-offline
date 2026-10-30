@@ -55,6 +55,13 @@ declare global {
       dropboxSignIn: () => Promise<string>;
       hasStoredDropboxCredentials: () => Promise<boolean>;
       dropboxSignOut: () => Promise<boolean>;
+      // Self-updater (configs/desktop/electron/updater.cjs) — see
+      // #ui/update-available-ui-handler for the only consumer.
+      checkForUpdate: () => Promise<{ version: string; buildNumber: number; tagName: string } | null>;
+      downloadUpdate: () => Promise<{ version: string; buildNumber: number }>;
+      cancelDownload: () => void;
+      onUpdateProgress: (callback: (progress: { received: number; total: number }) => void) => void;
+      applyUpdateAndRelaunch: () => Promise<void>;
     };
   }
 }

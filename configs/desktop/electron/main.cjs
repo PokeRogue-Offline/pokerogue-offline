@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const crypto = require('crypto');
 const https = require('https');
+const { registerUpdater } = require('./updater.cjs');
 
 let mainWindow;
 
@@ -42,6 +43,8 @@ function createWindow() {
   if (process.env.DEBUG) {
     mainWindow.webContents.openDevTools();
   }
+
+  registerUpdater(mainWindow);
 }
 
 app.on('ready', createWindow);

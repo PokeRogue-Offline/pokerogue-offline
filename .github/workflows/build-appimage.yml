@@ -95,8 +95,16 @@ jobs:
         run: |
           cp ${{ github.workspace }}/configs/desktop/electron/main.cjs pokerogue-src/main.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/preload.cjs pokerogue-src/preload.cjs
+          cp ${{ github.workspace }}/configs/desktop/electron/updater.cjs pokerogue-src/updater.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/electron-builder.appimage.json pokerogue-src/electron-builder.json
           cp ${{ github.workspace }}/docs/appIcon.png pokerogue-src/appIcon.png
+
+      - name: Inject build number into updater.cjs
+        uses: ./.github/actions/inject-build-number-banner
+        with:
+          build-number: ${{ inputs.build_number || github.run_number }}
+          dev: ${{ inputs.dev }}
+          target-file: pokerogue-src/updater.cjs
 
       - name: Inject Google OAuth credentials into main.cjs
         uses: ./.github/actions/inject-google-desktop-oauth
