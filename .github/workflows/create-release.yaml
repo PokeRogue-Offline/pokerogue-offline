@@ -410,6 +410,35 @@ jobs:
           unzip macos-arm64.zip -d macos-arm64-out
           mv "macos-arm64-out/PokeRogueOffline${TAG}-arm64.dmg" "./PokeRogueOffline${TAG}-arm64.dmg"
 
+      # macOS .app bundle tar.gz assets - separate from the DMGs above, used
+      # only by the in-Electron self-updater (it swaps the raw bundle in
+      # directly rather than mounting a disk image).
+      - name: Download macOS x64 app bundle tar.gz artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MACOS_RUN_ID: ${{ steps.runs.outputs.macos_run_id }}
+          TAG: ${{ steps.suffix.outputs.tag }}
+        run: |
+          ARTIFACT_ID=$(gh api "repos/$REPO/actions/runs/$MACOS_RUN_ID/artifacts" \
+            --jq ".artifacts[] | select(.name == \"PokeRogueOffline-macOS-x64-app${TAG}\") | .id")
+          gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > macos-x64-app.zip
+          unzip macos-x64-app.zip -d macos-x64-app-out
+          mv "macos-x64-app-out/PokeRogueOffline${TAG}-x64.app.tar.gz" "./PokeRogueOffline${TAG}-x64.app.tar.gz"
+
+      - name: Download macOS arm64 app bundle tar.gz artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MACOS_RUN_ID: ${{ steps.runs.outputs.macos_run_id }}
+          TAG: ${{ steps.suffix.outputs.tag }}
+        run: |
+          ARTIFACT_ID=$(gh api "repos/$REPO/actions/runs/$MACOS_RUN_ID/artifacts" \
+            --jq ".artifacts[] | select(.name == \"PokeRogueOffline-macOS-arm64-app${TAG}\") | .id")
+          gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > macos-arm64-app.zip
+          unzip macos-arm64-app.zip -d macos-arm64-app-out
+          mv "macos-arm64-app-out/PokeRogueOffline${TAG}-arm64.app.tar.gz" "./PokeRogueOffline${TAG}-arm64.app.tar.gz"
+
 
       # -----------------------------------------------------------------------
       # Read the version string from version.txt bundled in the iOS artifact.
@@ -477,6 +506,22 @@ jobs:
           path: PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.dmg
           retention-days: 30
 
+      - name: Upload macOS x64 app bundle artifact
+        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokeRogueOffline-macOS-x64-app-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
+          path: PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.app.tar.gz
+          retention-days: 30
+
+      - name: Upload macOS arm64 app bundle artifact
+        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokeRogueOffline-macOS-arm64-app-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
+          path: PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.app.tar.gz
+          retention-days: 30
+
       - name: Get IPA size
         if: ${{ steps.gate.outputs.is_release == 'true' }}
         id: ipa_size
@@ -497,6 +542,8 @@ jobs:
             PokeRogueOffline.exe \
             PokeRogueOffline-x64.dmg \
             PokeRogueOffline-arm64.dmg \
+            PokeRogueOffline-x64.app.tar.gz \
+            PokeRogueOffline-arm64.app.tar.gz \
             > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -522,7 +569,8 @@ jobs:
             - **PokeRogueOffline.exe** — Windows Portable EXE
             - **PokeRogueOffline-x64.dmg** — macOS (Intel)
             - **PokeRogueOffline-arm64.dmg** — macOS (Apple Silicon)
-            - **SHA256SUMS.txt** — checksums for the six files above
+            - **PokeRogueOffline-x64.app.tar.gz** / **PokeRogueOffline-arm64.app.tar.gz** — macOS app bundle, used only by the in-app self-updater (not for manual install — use the DMG for that)
+            - **SHA256SUMS.txt** — checksums for the eight files above
             - Build provenance for each binary is attested via GitHub Actions — verify with `gh attestation verify <file> --repo ${{ github.repository }}`
 
           files: |
@@ -532,6 +580,8 @@ jobs:
             PokeRogueOffline.exe
             PokeRogueOffline-x64.dmg
             PokeRogueOffline-arm64.dmg
+            PokeRogueOffline-x64.app.tar.gz
+            PokeRogueOffline-arm64.app.tar.gz
             SHA256SUMS.txt
 
         env:

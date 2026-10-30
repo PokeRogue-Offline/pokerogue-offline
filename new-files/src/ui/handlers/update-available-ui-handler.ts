@@ -1,6 +1,7 @@
 import { globalScene } from "#app/global-scene";
 import { Button } from "#enums/buttons";
 import { TextStyle } from "#enums/text-style";
+import { isElectron } from "#system/offline/backup-provider";
 import type { ReleaseInfo } from "#system/offline/update-check-api";
 import { ScrollBar } from "#ui/containers/scroll-bar";
 import { addBBCodeTextObject, addTextObject } from "#ui/text";
@@ -35,6 +36,11 @@ const BODY_WIDTH_PX = SCROLLBAR_X - BODY_X - 4;
 
 const SCROLL_STEP_PX = 16;
 
+// Electron-only: "idle" shows the normal paging/scroll footer (plus a
+// "Download & Install" hint); the rest replace the footer entirely while the
+// in-Electron self-updater (configs/desktop/electron/updater.cjs) runs.
+type UpdateDownloadState = "idle" | "downloading" | "ready" | "applying" | "error";
+
 export class UpdateAvailableUiHandler extends UiHandler {
   private container: Phaser.GameObjects.Container;
   private titleText: Phaser.GameObjects.Text;
@@ -48,6 +54,10 @@ export class UpdateAvailableUiHandler extends UiHandler {
 
   private scrollY = 0;
   private contentHeight = 0;
+
+  private downloadState: UpdateDownloadState = "idle";
+  private downloadProgressText = "";
+  private downloadErrorText = "";
 
   setup(): void {
     const ui = this.getUi();
@@ -123,12 +133,7 @@ export class UpdateAvailableUiHandler extends UiHandler {
     this.pagerText.setText(this.releases.length > 1 ? `${this.pageIndex + 1} / ${this.releases.length}` : "");
     this.bodyText.setText(markdownToBBCode(release.changelog));
 
-    const hints: string[] = ["↑↓ Scroll"];
-    if (this.releases.length > 1) {
-      hints.push("◀▶ Version");
-    }
-    hints.push("Cancel: Close");
-    this.footerText.setText(hints.join("   "));
+    this.refreshFooter();
 
     this.scrollY = 0;
     this.contentHeight = this.bodyText.displayHeight;
@@ -138,14 +143,101 @@ export class UpdateAvailableUiHandler extends UiHandler {
     this.scrollBar.setScrollCursor(0);
   }
 
+  /**
+   * Builds the footer text for whatever's currently going on. Outside of
+   * Electron (the web build), or while idle, this is just the normal
+   * paging/scroll hints - everything else is the self-updater's own status,
+   * which replaces those hints entirely since paging/scrolling don't apply
+   * mid-download.
+   */
+  private refreshFooter(): void {
+    if (isElectron()) {
+      switch (this.downloadState) {
+        case "downloading":
+          this.footerText.setText(`Downloading… ${this.downloadProgressText}   Cancel: Abort`);
+          return;
+        case "ready":
+          this.footerText.setText("Enter: Restart & Install   Cancel: Later");
+          return;
+        case "applying":
+          this.footerText.setText("Applying update…");
+          return;
+        case "error":
+          this.footerText.setText(`${this.downloadErrorText}   Cancel: Close`);
+          return;
+        default:
+          break;
+      }
+    }
+
+    const hints: string[] = ["↑↓ Scroll"];
+    if (this.releases.length > 1) {
+      hints.push("◀▶ Version");
+    }
+    if (isElectron()) {
+      hints.push("Enter: Download & Install");
+    }
+    hints.push("Cancel: Close");
+    this.footerText.setText(hints.join("   "));
+  }
+
+  /** Kicks off downloadUpdate() and tracks progress/outcome via downloadState. */
+  private startDownload(): void {
+    this.downloadState = "downloading";
+    this.downloadProgressText = "0%";
+    this.refreshFooter();
+
+    window.pkrOffline?.onUpdateProgress(({ received, total }) => {
+      if (this.downloadState !== "downloading") {
+        return;
+      }
+      this.downloadProgressText = total > 0 ? `${Math.floor((received / total) * 100)}%` : `${Math.floor(received / 1024)} KB`;
+      this.refreshFooter();
+    });
+
+    window.pkrOffline
+      ?.downloadUpdate()
+      .then(() => {
+        this.downloadState = "ready";
+        this.refreshFooter();
+      })
+      .catch((err: unknown) => {
+        this.downloadState = "error";
+        this.downloadErrorText = err instanceof Error ? err.message : "Update download failed.";
+        this.refreshFooter();
+      });
+  }
+
+  /** Swaps the verified download into place and relaunches — only valid once downloadState is "ready". */
+  private applyUpdate(): void {
+    this.downloadState = "applying";
+    this.refreshFooter();
+
+    window.pkrOffline?.applyUpdateAndRelaunch().catch((err: unknown) => {
+      this.downloadState = "error";
+      this.downloadErrorText = err instanceof Error ? err.message : "Failed to apply update.";
+      this.refreshFooter();
+    });
+  }
+
   processInput(button: Button): boolean {
     const ui = this.getUi();
     let success = false;
 
     switch (button) {
       case Button.CANCEL:
+        if (this.downloadState === "downloading") {
+          window.pkrOffline?.cancelDownload();
+          this.downloadState = "idle";
+          this.refreshFooter();
+          success = true;
+          break;
+        }
         ui.revertMode();
         success = true;
+        break;
+      case Button.ACTION:
+        success = this.handleAction();
         break;
       case Button.LEFT:
         if (this.pageIndex > 0) {
@@ -176,6 +268,24 @@ export class UpdateAvailableUiHandler extends UiHandler {
     }
 
     return success;
+  }
+
+  /** Button.ACTION: starts a download when idle, or applies+relaunches once one is verified and ready. */
+  private handleAction(): boolean {
+    if (!isElectron()) {
+      return false;
+    }
+
+    switch (this.downloadState) {
+      case "idle":
+        this.startDownload();
+        return true;
+      case "ready":
+        this.applyUpdate();
+        return true;
+      default:
+        return false;
+    }
   }
 
   private manualScroll(delta: number): boolean {

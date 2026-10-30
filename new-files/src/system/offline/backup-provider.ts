@@ -55,6 +55,28 @@ declare global {
       dropboxSignIn: () => Promise<string>;
       hasStoredDropboxCredentials: () => Promise<boolean>;
       dropboxSignOut: () => Promise<boolean>;
+      // Self-updater (configs/desktop/electron/updater.cjs) — see
+      // #ui/update-available-ui-handler for the only consumer.
+      checkForUpdate: () => Promise<{ version: string; buildNumber: number; tagName: string } | null>;
+      downloadUpdate: () => Promise<{ version: string; buildNumber: number }>;
+      cancelDownload: () => void;
+      onUpdateProgress: (callback: (progress: { received: number; total: number }) => void) => void;
+      applyUpdateAndRelaunch: () => Promise<void>;
+      // Electron Tools-menu integration (main.cjs's "Check for Updates" item)
+      // - see patches/all/node/update-check.js for the only consumer.
+      notifyTitleScreenState: (isTitleScreen: boolean) => void;
+      onCheckForUpdatesRequested: (callback: () => void) => void;
+      reportUpdateCheckResult: (result: { status: "up-to-date" | "disabled" | "error" }) => void;
+      // Discord Rich Presence (configs/desktop/electron/discord-rpc.cjs) -
+      // see patches/all/node/update-check.js for the only consumer.
+      updateDiscordPresence: (
+        state:
+          | { kind: "title" }
+          | { kind: "menu" }
+          | { kind: "battle"; runType: string; waveIndex: number; leadPokemon: string | null }
+          | null,
+      ) => void;
+      setDiscordRichPresenceEnabled: (isEnabled: boolean) => void;
     };
   }
 }
