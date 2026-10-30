@@ -137,6 +137,16 @@ jobs:
             -f version_override=${{ inputs.version_override }}
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
+      - name: Trigger Test Suite
+        id: trigger_test_suite
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run run-patched-suite.yml --ref "${{ github.ref_name }}" \
+            -f branch=${{ inputs.branch || 'main' }}
+          echo "triggered_after=$TS" >> $GITHUB_OUTPUT
+
 
       # -----------------------------------------------------------------------
       # Locate the run IDs by polling for runs created after the trigger
@@ -153,6 +163,7 @@ jobs:
           APPIMAGE_AFTER: ${{ steps.trigger_appimage.outputs.triggered_after }}
           WINDOWS_AFTER: ${{ steps.trigger_windows.outputs.triggered_after }}
           MACOS_AFTER: ${{ steps.trigger_macos.outputs.triggered_after }}
+          TEST_SUITE_AFTER: ${{ steps.trigger_test_suite.outputs.triggered_after }}
         run: |
           set -e
 
@@ -184,6 +195,7 @@ jobs:
           locate_run "build-appimage.yml" "$APPIMAGE_AFTER" "AppImage" /tmp/appimage_run_id
           locate_run "build-exe.yml" "$WINDOWS_AFTER" "Windows" /tmp/windows_run_id
           locate_run "build-macos.yml" "$MACOS_AFTER" "macOS" /tmp/macos_run_id
+          locate_run "run-patched-suite.yml" "$TEST_SUITE_AFTER" "Test Suite" /tmp/test_suite_run_id
 
 
           IOS_RUN_ID=$(cat /tmp/ios_run_id)
@@ -191,6 +203,7 @@ jobs:
           APPIMAGE_RUN_ID=$(cat /tmp/appimage_run_id)
           WINDOWS_RUN_ID=$(cat /tmp/windows_run_id)
           MACOS_RUN_ID=$(cat /tmp/macos_run_id)
+          TEST_SUITE_RUN_ID=$(cat /tmp/test_suite_run_id)
 
 
           echo "ios_run_id=$IOS_RUN_ID" >> $GITHUB_OUTPUT
@@ -198,6 +211,7 @@ jobs:
           echo "appimage_run_id=$APPIMAGE_RUN_ID" >> $GITHUB_OUTPUT
           echo "windows_run_id=$WINDOWS_RUN_ID" >> $GITHUB_OUTPUT
           echo "macos_run_id=$MACOS_RUN_ID" >> $GITHUB_OUTPUT
+          echo "test_suite_run_id=$TEST_SUITE_RUN_ID" >> $GITHUB_OUTPUT
 
 
       # -----------------------------------------------------------------------
@@ -214,11 +228,12 @@ jobs:
           APPIMAGE_RUN_ID: ${{ steps.runs.outputs.appimage_run_id }}
           WINDOWS_RUN_ID: ${{ steps.runs.outputs.windows_run_id }}
           MACOS_RUN_ID: ${{ steps.runs.outputs.macos_run_id }}
+          TEST_SUITE_RUN_ID: ${{ steps.runs.outputs.test_suite_run_id }}
 
         run: |
           set -e
 
-          TIMEOUT=5400  # 90 minutes
+          TIMEOUT=10800  # 3 hours - the test suite matrix can run long
           POLL=30
           ELAPSED=0
 
@@ -244,8 +259,10 @@ jobs:
             WINDOWS_CONCLUSION=$(gh api "repos/$REPO/actions/runs/$WINDOWS_RUN_ID" --jq '.conclusion')
             MACOS_STATUS=$(gh api "repos/$REPO/actions/runs/$MACOS_RUN_ID" --jq '.status')
             MACOS_CONCLUSION=$(gh api "repos/$REPO/actions/runs/$MACOS_RUN_ID" --jq '.conclusion')
+            TEST_SUITE_STATUS=$(gh api "repos/$REPO/actions/runs/$TEST_SUITE_RUN_ID" --jq '.status')
+            TEST_SUITE_CONCLUSION=$(gh api "repos/$REPO/actions/runs/$TEST_SUITE_RUN_ID" --jq '.conclusion')
 
-            echo -e "iOS: $IOS_STATUS / $IOS_CONCLUSION | Android: $ANDROID_STATUS / $ANDROID_CONCLUSION | AppImage: $APPIMAGE_STATUS / $APPIMAGE_CONCLUSION | Windows: $WINDOWS_STATUS / $WINDOWS_CONCLUSION | macOS: $MACOS_STATUS / $MACOS_CONCLUSION | (${ELAPSED}s elapsed)"
+            echo -e "iOS: $IOS_STATUS / $IOS_CONCLUSION | Android: $ANDROID_STATUS / $ANDROID_CONCLUSION | AppImage: $APPIMAGE_STATUS / $APPIMAGE_CONCLUSION | Windows: $WINDOWS_STATUS / $WINDOWS_CONCLUSION | macOS: $MACOS_STATUS / $MACOS_CONCLUSION | Test Suite: $TEST_SUITE_STATUS / $TEST_SUITE_CONCLUSION | (${ELAPSED}s elapsed)"
 
             # If one has failed, cancel the others and exit immediately
             if [ "$IOS_STATUS" = "completed" ] && [ "$IOS_CONCLUSION" != "success" ]; then
@@ -253,6 +270,7 @@ jobs:
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
+              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: iOS build ended with: $IOS_CONCLUSION"
               exit 1
             fi
@@ -261,15 +279,17 @@ jobs:
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
+              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: Android build ended with: $ANDROID_CONCLUSION"
               exit 1
             fi
-            
+
             if [ "$APPIMAGE_STATUS" = "completed" ] && [ "$APPIMAGE_CONCLUSION" != "success" ]; then
               cancel_run "$IOS_RUN_ID" "iOS" "$IOS_STATUS"
               cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
+              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: AppImage build ended with: $APPIMAGE_CONCLUSION"
               exit 1
             fi
@@ -279,6 +299,7 @@ jobs:
               cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
+              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: Windows build ended with: $WINDOWS_CONCLUSION"
               exit 1
             fi
@@ -288,11 +309,22 @@ jobs:
               cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
+              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: macOS build ended with: $MACOS_CONCLUSION"
               exit 1
             fi
 
-            if [ "$IOS_STATUS" = "completed" ] && [ "$ANDROID_STATUS" = "completed" ] && [ "$APPIMAGE_STATUS" = "completed" ] && [ "$WINDOWS_STATUS" = "completed" ] && [ "$MACOS_STATUS" = "completed" ]; then
+            if [ "$TEST_SUITE_STATUS" = "completed" ] && [ "$TEST_SUITE_CONCLUSION" != "success" ]; then
+              cancel_run "$IOS_RUN_ID" "iOS" "$IOS_STATUS"
+              cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
+              cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
+              cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
+              cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
+              echo "ERROR: Test Suite ended with: $TEST_SUITE_CONCLUSION"
+              exit 1
+            fi
+
+            if [ "$IOS_STATUS" = "completed" ] && [ "$ANDROID_STATUS" = "completed" ] && [ "$APPIMAGE_STATUS" = "completed" ] && [ "$WINDOWS_STATUS" = "completed" ] && [ "$MACOS_STATUS" = "completed" ] && [ "$TEST_SUITE_STATUS" = "completed" ]; then
               echo "All builds succeeded."
               break
             fi
@@ -304,6 +336,7 @@ jobs:
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
+              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: Timed out waiting for builds to complete."
               exit 1
             fi
@@ -645,6 +678,7 @@ jobs:
           cancel_active_runs "build-appimage.yml" "AppImage"
           cancel_active_runs "build-exe.yml" "Windows"
           cancel_active_runs "build-macos.yml" "macOS"
+          cancel_active_runs "run-patched-suite.yml" "Test Suite"
 
 
   notify:
