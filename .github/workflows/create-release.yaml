@@ -46,6 +46,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }} # This exposes the data
       is_release: ${{ steps.gate.outputs.is_release }}
+      is_dev_release: ${{ steps.gate.outputs.is_dev_release }}
       build_number: ${{ steps.build.outputs.number }}
       ipa_size: ${{ steps.ipa_size.outputs.size }}
     # Job-level permissions override the workflow-level block entirely, so
@@ -323,6 +324,20 @@ jobs:
             echo "is_release=false" >> $GITHUB_OUTPUT
           fi
 
+          # Dev test releases: published whenever dev=true, regardless of branch - this is
+          # the maintainer's existing manual-dispatch test workflow (any branch + a custom
+          # version_override), just now also publishing something a dev-flagged build's
+          # in-app updater can discover. Tag is dev-v{version}-{buildNumber} ("dev-" prefix)
+          # so it never matches update-check-api.ts's/updater.cjs's/mobile-updater.ts's
+          # anchored "^v..." tag regexes - real builds stay structurally blind to these
+          # with no code change on their side. Title carries a "***DEV***" marker for
+          # browsing the Releases page by eye only; nothing parses it.
+          if [ "${{ inputs.dev }}" = "true" ]; then
+            echo "is_dev_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_dev_release=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Set naming suffix
         id: suffix
         run: |
@@ -344,6 +359,8 @@ jobs:
           gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > ipa.zip
           unzip ipa.zip -d ipa-out
           mv "ipa-out/PokeRogueOffline${TAG}.ipa" "./PokeRogueOffline${TAG}.ipa"
+          mv "ipa-out/ota-ios.zip" "./PokeRogueOffline-iOS-ota.zip"
+          mv "ipa-out/ota-manifest-ios.json" "./PokeRogueOffline-iOS-ota-manifest.json"
 
       - name: Download APK artifact
         env:
@@ -357,6 +374,8 @@ jobs:
           gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > apk.zip
           unzip apk.zip -d apk-out
           mv "apk-out/PokeRogueOffline${TAG}.apk" "./PokeRogueOffline${TAG}.apk"
+          mv "apk-out/ota-android.zip" "./PokeRogueOffline-Android-ota.zip"
+          mv "apk-out/ota-manifest-android.json" "./PokeRogueOffline-Android-ota-manifest.json"
           
       - name: Download AppImage artifact
         env:
@@ -452,6 +471,17 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Found Version: ${VERSION}"
 
+      - name: Compute release tag/title
+        id: release_meta
+        run: |
+          if [ "${{ steps.gate.outputs.is_dev_release }}" = "true" ]; then
+            echo "tag_name=dev-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}" >> $GITHUB_OUTPUT
+            echo "name=***DEV*** v${{ steps.version.outputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag_name=v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}" >> $GITHUB_OUTPUT
+            echo "name=v${{ steps.version.outputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
       # -----------------------------------------------------------------------
       # Non-release run (dev=true, or dev=false on a non-main branch): skip
       # the GitHub release and AltStore feed update. Each platform's output
@@ -459,7 +489,7 @@ jobs:
       # just the iOS build doesn't pull the others along.
       # -----------------------------------------------------------------------
       - name: Upload iOS artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-iOS-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -467,7 +497,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Android artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-Android-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -475,7 +505,7 @@ jobs:
           retention-days: 30
 
       - name: Upload AppImage artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-AppImage-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -483,7 +513,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Windows artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-Windows-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -491,7 +521,7 @@ jobs:
           retention-days: 30
 
       - name: Upload macOS x64 artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-macOS-x64-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -499,7 +529,7 @@ jobs:
           retention-days: 30
 
       - name: Upload macOS arm64 artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-macOS-arm64-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -507,7 +537,7 @@ jobs:
           retention-days: 30
 
       - name: Upload macOS x64 app bundle artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-macOS-x64-app-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -515,7 +545,7 @@ jobs:
           retention-days: 30
 
       - name: Upload macOS arm64 app bundle artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-macOS-arm64-app-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -533,7 +563,7 @@ jobs:
       # wasn't tampered with in transit) has something to check it against.
       # -----------------------------------------------------------------------
       - name: Generate checksums
-        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        if: ${{ steps.gate.outputs.is_release == 'true' || steps.gate.outputs.is_dev_release == 'true' }}
         run: |
           sha256sum \
             PokeRogueOffline.ipa \
@@ -544,18 +574,25 @@ jobs:
             PokeRogueOffline-arm64.dmg \
             PokeRogueOffline-x64.app.tar.gz \
             PokeRogueOffline-arm64.app.tar.gz \
+            PokeRogueOffline-Android-ota.zip \
+            PokeRogueOffline-iOS-ota.zip \
             > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       # -----------------------------------------------------------------------
-      # Publish the combined GitHub release. Only when dev=false AND branch=main.
+      # Publish the combined GitHub release: either a real release (dev=false
+      # AND branch=main), or a dev test release (dev=true, any branch) - the
+      # latter is a throwaway release used to let dev-flagged builds exercise
+      # the in-app updater (see release_meta above for the tag/title scheme
+      # that keeps these invisible to real builds) and is never promoted off
+      # prerelease.
       # -----------------------------------------------------------------------
       - name: Create Release
-        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        if: ${{ steps.gate.outputs.is_release == 'true' || steps.gate.outputs.is_dev_release == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          tag_name: v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
-          name: v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.release_meta.outputs.tag_name }}
+          name: ${{ steps.release_meta.outputs.name }}
           prerelease: true
           body: |
             ## PokeRogueOffline v${{ steps.version.outputs.version }}
@@ -570,7 +607,8 @@ jobs:
             - **PokeRogueOffline-x64.dmg** — macOS (Intel)
             - **PokeRogueOffline-arm64.dmg** — macOS (Apple Silicon)
             - **PokeRogueOffline-x64.app.tar.gz** / **PokeRogueOffline-arm64.app.tar.gz** — macOS app bundle, used only by the in-app self-updater (not for manual install — use the DMG for that)
-            - **SHA256SUMS.txt** — checksums for the eight files above
+            - **PokeRogueOffline-Android-ota.zip** / **PokeRogueOffline-iOS-ota.zip** + their `-ota-manifest.json` — web-only OTA bundles used by the in-app mobile updater (not for manual install)
+            - **SHA256SUMS.txt** — checksums for the ten files above (excluding the two `-ota-manifest.json` files, which carry their own bundle checksum)
             - Build provenance for each binary is attested via GitHub Actions — verify with `gh attestation verify <file> --repo ${{ github.repository }}`
 
           files: |
@@ -582,6 +620,10 @@ jobs:
             PokeRogueOffline-arm64.dmg
             PokeRogueOffline-x64.app.tar.gz
             PokeRogueOffline-arm64.app.tar.gz
+            PokeRogueOffline-Android-ota.zip
+            PokeRogueOffline-Android-ota-manifest.json
+            PokeRogueOffline-iOS-ota.zip
+            PokeRogueOffline-iOS-ota-manifest.json
             SHA256SUMS.txt
 
         env:
@@ -707,11 +749,16 @@ jobs:
           STATUS: ${{ needs.release.result }}
           VERSION: ${{ needs.release.outputs.version }}
           IS_RELEASE: ${{ needs.release.outputs.is_release }}
+          IS_DEV_RELEASE: ${{ needs.release.outputs.is_dev_release }}
         run: |
           if [ "$STATUS" == "success" ] && [ "$IS_RELEASE" == "true" ]; then
             TITLE="Release Successful! 🚀"
             TAGS="rocket,white_check_mark"
             MSG="PokeRogueOffline v$VERSION is live."
+          elif [ "$STATUS" == "success" ] && [ "$IS_DEV_RELEASE" == "true" ]; then
+            TITLE="Dev Release Published 🧪"
+            TAGS="test_tube,white_check_mark"
+            MSG="PokeRogueOffline v$VERSION dev test release published (prerelease, dev- tag)."
           elif [ "$STATUS" == "success" ]; then
             TITLE="Build Artifacts Ready 🧪"
             TAGS="test_tube,white_check_mark"

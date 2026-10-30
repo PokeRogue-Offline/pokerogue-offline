@@ -1,8 +1,10 @@
 import { globalScene } from "#app/global-scene";
 import { Button } from "#enums/buttons";
 import { TextStyle } from "#enums/text-style";
-import { isElectron } from "#system/offline/backup-provider";
+import { isCapacitor, isElectron } from "#system/offline/backup-provider";
+import { checkForMobileUpdate, type MobileUpdateCheckResult } from "#system/offline/mobile-updater";
 import type { ReleaseInfo } from "#system/offline/update-check-api";
+import { startMobileUpdateFlow } from "#ui/mobile-update-overlay";
 import { ScrollBar } from "#ui/containers/scroll-bar";
 import { addBBCodeTextObject, addTextObject } from "#ui/text";
 import { UiHandler } from "#ui/ui-handler";
@@ -58,6 +60,15 @@ export class UpdateAvailableUiHandler extends UiHandler {
   private downloadState: UpdateDownloadState = "idle";
   private downloadProgressText = "";
   private downloadErrorText = "";
+
+  // Capacitor-only: populated asynchronously by show() via
+  // checkForMobileUpdate(); null until that resolves, or forever on a
+  // non-Capacitor platform, or when there's nothing actionable (iOS
+  // native-touching releases - see mobile-updater.ts's "kind" field).
+  // Once an update is actually started, the DOM overlay (#ui/mobile-update-
+  // overlay) owns the rest of the flow entirely - this class just hands off.
+  private mobileUpdateResult: MobileUpdateCheckResult | null = null;
+  private mobileUpdateStarted = false;
 
   setup(): void {
     const ui = this.getUi();
@@ -118,9 +129,23 @@ export class UpdateAvailableUiHandler extends UiHandler {
     }
 
     this.pageIndex = 0;
+    this.mobileUpdateResult = null;
+    this.mobileUpdateStarted = false;
     this.getUi().bringToTop(this.container);
     this.container.setVisible(true);
     this.renderPage();
+
+    // Capacitor-only, independent of the changelog data above:
+    // title-ui-handler.ts (patches/all/node/update-check.js) passes the
+    // installed version/build number through as args[1]/args[2] for
+    // exactly this - update-check-api.ts/checkForUpdates() itself stays
+    // platform-agnostic and untouched.
+    if (isCapacitor() && typeof args[1] === "string" && typeof args[2] === "number") {
+      checkForMobileUpdate(args[1], args[2]).then(result => {
+        this.mobileUpdateResult = result;
+        this.refreshFooter();
+      });
+    }
 
     return true;
   }
@@ -176,9 +201,16 @@ export class UpdateAvailableUiHandler extends UiHandler {
     }
     if (isElectron()) {
       hints.push("Enter: Download & Install");
+    } else if (isCapacitor() && this.mobileUpdateActionable() && !this.mobileUpdateStarted) {
+      hints.push("Enter: Download Update");
     }
     hints.push("Cancel: Close");
     this.footerText.setText(hints.join("   "));
+  }
+
+  /** True when there's something for Button.ACTION to do on Capacitor - false for null (not checked yet / nothing applicable) and for the iOS native-touching "notify only" kind. */
+  private mobileUpdateActionable(): boolean {
+    return this.mobileUpdateResult?.kind === "ota" || this.mobileUpdateResult?.kind === "native-android";
   }
 
   /** Kicks off downloadUpdate() and tracks progress/outcome via downloadState. */
@@ -272,20 +304,27 @@ export class UpdateAvailableUiHandler extends UiHandler {
 
   /** Button.ACTION: starts a download when idle, or applies+relaunches once one is verified and ready. */
   private handleAction(): boolean {
-    if (!isElectron()) {
-      return false;
+    if (isElectron()) {
+      switch (this.downloadState) {
+        case "idle":
+          this.startDownload();
+          return true;
+        case "ready":
+          this.applyUpdate();
+          return true;
+        default:
+          return false;
+      }
     }
 
-    switch (this.downloadState) {
-      case "idle":
-        this.startDownload();
-        return true;
-      case "ready":
-        this.applyUpdate();
-        return true;
-      default:
-        return false;
+    if (isCapacitor() && this.mobileUpdateActionable() && !this.mobileUpdateStarted) {
+      this.mobileUpdateStarted = true;
+      startMobileUpdateFlow(this.mobileUpdateResult!);
+      this.refreshFooter();
+      return true;
     }
+
+    return false;
   }
 
   private manualScroll(delta: number): boolean {

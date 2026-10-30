@@ -29,6 +29,7 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
     // the only WebView in this app, so this single listener covers it.
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(OtaBridgePlugin.class);
         super.onCreate(savedInstanceState);
         getBridge().addWebViewListener(new WebViewListener() {
             @Override

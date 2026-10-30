@@ -46,6 +46,16 @@ apply_patch "community-menu.js"               all
 apply_patch "enable-touch-controls-quad-tap.js" all
 
 apply_patch "update-available-screen.js" all
+# Copies in #system/offline/mobile-updater.ts and #ui/mobile-update-overlay.ts
+# and wires their runtime-gated (Capacitor.isNativePlatform()) hooks into
+# main.ts/title-ui-handler.ts, for ALL platforms, not just mobile - needed so
+# that update-available-ui-handler.ts (an all-platforms file) can statically
+# reference them without breaking desktop's bundling (Rolldown resolves
+# every static/dynamic import specifier at build time regardless of runtime
+# guards - see externalize-capacitor-imports.js's doc comment for the same
+# constraint hitting Capacitor npm packages). Every exported function in
+# both files already no-ops on non-Capacitor platforms.
+apply_patch "mobile-ota-updater.js"      all
 
 # ── Mobile (iOS + Android) ────────────────────────────────────────────────────
 if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
