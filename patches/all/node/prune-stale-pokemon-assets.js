@@ -146,46 +146,18 @@
  * `arenaBg`/`arenaPlayer`/`arenaEnemy` had actually released the key - so
  * sub-patch 1e reuses `getInUseTextureKeys()` there too.
  *
- * Sub-patch 4 adds a defensive guard in the sprite render path itself as a
+ * Sub-patches 4 and 5 add defensive guards in the sprite render pipeline
+ * itself (src/pipelines/sprite.ts, src/pipelines/field-sprite.ts) as a
  * safety net: if a texture is ever evicted while still referenced despite
  * the scene-graph check above (e.g. a GameObject not yet attached to the
  * tree mid-transition), the sprite is skipped/hidden for that frame instead
  * of throwing and killing the render loop.
  *
- * v4 - PHASER 4 PORT (2026-10-30): upstream PR #7738 renamed
- * src/pipelines/{sprite,field-sprite}.ts to src/render-nodes/{sprite,
- * field-sprite}.ts and replaced the Pipeline onBind()/onBatch() hooks
- * sub-patches 4/5 used to guard with a Submitter/BatchHandler pair. Verified
- * the hazard itself is unchanged under Phaser 4 (TextureManager.remove() -
- * Texture.destroy() still nulls every Frame.source/texture it owns without
- * walking the scene graph to clear GameObjects still holding a reference,
- * and GameObject.willRender() never checks texture validity), so this guard
- * is still needed, not obsoleted by the rewrite.
- *
- * The port is NOT a 1:1 rename of the old onBind guard into
- * setRenderOptions() (the method that looks like onBind's equivalent).
- * Phaser's own `SubmitterQuad.run()` calls `texturerNode.run()`, then this
- * node's `setRenderOptions()`, then unconditionally reads
- * `texturerNode.frame.source.glTexture` to pass to the batch handler -
- * `run()` never checks setRenderOptions()'s return value, so a guard placed
- * only inside setRenderOptions() can't prevent the crash; execution falls
- * through to the crashing read regardless. The guard has to override
- * `run()` itself, before `super.run()` is called at all.
- *
- * It only needs to be added once, on the base `FieldSpriteSubmitter` (in
- * field-sprite.ts) rather than duplicated onto `SpriteSubmitter` too:
- * `SpriteSubmitter` (Pokemon sprites) extends `FieldSpriteSubmitter` and
- * doesn't override `run()`, and `addFieldSprite()` (arenaBg/arenaPlayer/
- * arenaEnemy/trainer - what clearBiomeAssets() evicts) goes through
- * `FieldSpriteSubmitter` directly - so one override on the base class
- * protects both call sites via inheritance. This also means sub-patch 5
- * (the old separate field-sprite.ts pipeline guard) no longer exists as a
- * separate step; it's folded into sub-patch 4.
- *
  * Targets: pokerogue-src/src/battle-scene.ts
  *          pokerogue-src/src/data/pokemon-species.ts
  *          pokerogue-src/src/phases/new-battle-phase.ts
- *          pokerogue-src/src/render-nodes/field-sprite.ts
+ *          pokerogue-src/src/pipelines/sprite.ts
+ *          pokerogue-src/src/pipelines/field-sprite.ts
  *          pokerogue-src/src/system/offline/scooom-dev.ts (new file)
  */
 
@@ -542,56 +514,95 @@ if (newBattlePhaseSrc.includes("pruneStaleAssets")) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-patch 4: src/render-nodes/field-sprite.ts
+// Sub-patch 4: src/pipelines/sprite.ts
 // ─────────────────────────────────────────────────────────────────────────────
-//
-// Phaser 4 port (see "v4" header comment above for the full reasoning on why
-// this has to override run() rather than setRenderOptions(), and why one
-// override on the base FieldSpriteSubmitter covers both arena/trainer field
-// sprites and Pokemon sprites without needing a separate sprite.ts sub-patch).
 
-const FIELD_SPRITE_RENDER_NODE_PATH = path.join("pokerogue-src", "src", "render-nodes", "field-sprite.ts");
-let fieldSpriteRenderNodeSrc = readFile(FIELD_SPRITE_RENDER_NODE_PATH);
+const SPRITE_PIPELINE_PATH = path.join("pokerogue-src", "src", "pipelines", "sprite.ts");
+let spritePipelineSrc = readFile(SPRITE_PIPELINE_PATH);
 
-if (fieldSpriteRenderNodeSrc.includes("gameObject.frame?.source")) {
-  console.log("SKIP field-sprite.ts — run() eviction guard already present");
+if (spritePipelineSrc.includes("sprite.texture?.source?.[0]")) {
+  console.log("SKIP sprite.ts — onBind guard already present");
 } else {
-  const SET_RENDER_OPTIONS_ANCHOR =
-    `  public override setRenderOptions(gameObject: GameObject, normalMap?: any, normalMapRotation?: number): void {\n` +
-    `    super.setRenderOptions(gameObject, normalMap, normalMapRotation);\n` +
+  const ONBIND_ANCHOR =
+    `  onBind(gameObject: Phaser.GameObjects.GameObject): void {\n` +
+    `    super.onBind(gameObject);\n` +
     `\n` +
-    `    // Port of the per-object part of v3 onBind\n` +
-    `    const data = (gameObject as Sprite).renderNodeData[this.name] as FieldSpriteRenderData | undefined;`;
-  requireAnchor(
-    fieldSpriteRenderNodeSrc,
-    SET_RENDER_OPTIONS_ANCHOR,
-    "FieldSpriteSubmitter.setRenderOptions() in render-nodes/field-sprite.ts",
-  );
-  fieldSpriteRenderNodeSrc = fieldSpriteRenderNodeSrc.replace(
-    SET_RENDER_OPTIONS_ANCHOR,
-    `  /**\n` +
-      `   * Offline: a sprite whose texture was evicted by pruneStaleAssets()/\n` +
-      `   * clearBiomeAssets() between frames has no texture source left.\n` +
-      `   * Phaser's own SubmitterQuad.run() reads \`texturerNode.frame.source.glTexture\`\n` +
-      `   * unconditionally after setRenderOptions() runs (and doesn't check this\n` +
-      `   * method's return value), so the guard has to live here, before\n` +
-      `   * super.run() is called at all - see prune-stale-pokemon-assets.js's "v4"\n` +
-      `   * header comment for why setRenderOptions() itself can't prevent the crash.\n` +
-      `   * Hiding the GameObject also makes future frames skip it via willRender().\n` +
-      `   */\n` +
-      `  public override run(...args: Parameters<Phaser.Renderer.WebGL.RenderNodes.SubmitterQuad["run"]>): void {\n` +
-      `    const gameObject = args[1] as Sprite;\n` +
-      `    if (!gameObject.frame?.source) {\n` +
-      `      gameObject.setVisible(false);\n` +
+    `    const sprite = gameObject as Phaser.GameObjects.Sprite;\n` +
+    `\n` +
+    `    // TODO: Add strong typing on this stuff\n` +
+    `    const data = sprite.pipelineData;`;
+  requireAnchor(spritePipelineSrc, ONBIND_ANCHOR, "SpritePipeline.onBind() signature in sprite.ts");
+  spritePipelineSrc = spritePipelineSrc.replace(
+    ONBIND_ANCHOR,
+    `  onBind(gameObject: Phaser.GameObjects.GameObject): void {\n` +
+      `    super.onBind(gameObject);\n` +
+      `\n` +
+      `    const sprite = gameObject as Phaser.GameObjects.Sprite;\n` +
+      `\n` +
+      `    // Offline: a sprite whose texture was evicted by pruneStaleAssets()/\n` +
+      `    // clearBiomeAssets() between frames has no texture source left - hide\n` +
+      `    // it instead of crashing here (see prune-stale-pokemon-assets.js "v3").\n` +
+      `    if (!sprite.texture?.source?.[0]) {\n` +
+      `      sprite.setVisible(false);\n` +
       `      return;\n` +
       `    }\n` +
-      `    super.run(...args);\n` +
-      `  }\n` +
       `\n` +
-      `${SET_RENDER_OPTIONS_ANCHOR}`,
+      `    // TODO: Add strong typing on this stuff\n` +
+      `    const data = sprite.pipelineData;`,
   );
 
-  writeFile(FIELD_SPRITE_RENDER_NODE_PATH, fieldSpriteRenderNodeSrc);
+  writeFile(SPRITE_PIPELINE_PATH, spritePipelineSrc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-patch 5: src/pipelines/field-sprite.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FIELD_SPRITE_PIPELINE_PATH = path.join("pokerogue-src", "src", "pipelines", "field-sprite.ts");
+let fieldSpritePipelineSrc = readFile(FIELD_SPRITE_PIPELINE_PATH);
+
+if (fieldSpritePipelineSrc.includes("override batchSprite")) {
+  console.log("SKIP field-sprite.ts — batchSprite guard already present");
+} else {
+  const ONBATCH_ANCHOR =
+    `  onBatch(gameObject: Phaser.GameObjects.GameObject): void {\n` +
+    `    if (gameObject) {\n` +
+    `      this.flush();\n` +
+    `    }\n` +
+    `  }\n` +
+    `}`;
+  requireAnchor(fieldSpritePipelineSrc, ONBATCH_ANCHOR, "FieldSpritePipeline.onBatch() + class close in field-sprite.ts");
+  fieldSpritePipelineSrc = fieldSpritePipelineSrc.replace(
+    ONBATCH_ANCHOR,
+    `  onBatch(gameObject: Phaser.GameObjects.GameObject): void {\n` +
+      `    if (gameObject) {\n` +
+      `      this.flush();\n` +
+      `    }\n` +
+      `  }\n` +
+      `\n` +
+      `  /**\n` +
+      `   * Offline: safety net alongside the onBind() guard in sprite.ts - if a\n` +
+      `   * sprite's texture was evicted from the cache (pruneStaleAssets()/\n` +
+      `   * clearBiomeAssets()) between frames, Phaser's own\n` +
+      `   * MultiPipeline.batchSprite reads frame.glTexture unconditionally and\n` +
+      `   * throws. Skip batching instead - the sprite just doesn't render that\n` +
+      `   * frame rather than crashing the whole render loop. See\n` +
+      `   * prune-stale-pokemon-assets.js "v3".\n` +
+      `   */\n` +
+      `  override batchSprite(\n` +
+      `    gameObject: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite,\n` +
+      `    camera: Phaser.Cameras.Scene2D.Camera,\n` +
+      `    parentTransformMatrix?: Phaser.GameObjects.Components.TransformMatrix,\n` +
+      `  ): void {\n` +
+      `    if (!gameObject?.frame?.source) {\n` +
+      `      return;\n` +
+      `    }\n` +
+      `    super.batchSprite(gameObject, camera, parentTransformMatrix);\n` +
+      `  }\n` +
+      `}`,
+  );
+
+  writeFile(FIELD_SPRITE_PIPELINE_PATH, fieldSpritePipelineSrc);
 }
 
 console.log("Stale Pokemon asset pruning applied successfully.");
