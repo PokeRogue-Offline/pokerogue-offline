@@ -63,26 +63,23 @@ jobs:
         working-directory: pokerogue-src
         run: pnpm install
 
+      - name: Run unit test suite
+        working-directory: pokerogue-src
+        run: pnpm test:silent
+
       - name: Install Electron dependencies
         working-directory: pokerogue-src
         run: pnpm add -D electron@43.0.0 electron-builder@26.15.3
 
       - name: Install Capacitor plugin stub for shared code resolution
         working-directory: pokerogue-src
-        # google-drive-backup.ts and dropbox-backup.ts each dynamically import
-        # native-only Capacitor plugins (@capgo/capacitor-social-login,
-        # @capacitor/browser, @capacitor/app), gated behind an isCapacitor()
-        # runtime check that's always false on Electron — but Vite/Rolldown
-        # still needs each package resolvable at BUILD time to code-split it,
-        # even though the chunk never actually loads here. Without this, the
-        # build (and Vitest's own module resolution, below) fails with an
-        # unresolved-import error even on a platform that will never execute
-        # that branch.
-        run: pnpm add @capacitor/core@8.4.1 @capacitor/app@8.1.1 @capacitor/browser@8.0.4 @capgo/capacitor-social-login@8.3.33
-
-      - name: Run unit test suite
-        working-directory: pokerogue-src
-        run: pnpm test:silent
+        # google-drive-backup.ts dynamically imports @capgo/capacitor-social-login,
+        # gated behind an isCapacitor() runtime check that's always false on
+        # Electron — but Vite/Rolldown still needs the package resolvable at
+        # BUILD time to code-split it, even though the chunk never actually
+        # loads here. Without this, the build fails with an unresolved-import
+        # error even on a platform that will never execute that branch.
+        run: pnpm add @capacitor/core@8.4.1 @capgo/capacitor-social-login@8.3.33
 
       - name: Inject Scooom dev-build flag
         uses: ./.github/actions/inject-scooom-dev-flag
