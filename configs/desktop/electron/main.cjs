@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, dialog, screen, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -30,6 +30,81 @@ const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const DROPBOX_APP_KEY = 'DROPBOX_APP_KEY_PLACEHOLDER';
 const DROPBOX_REDIRECT_PORT = 53682;
 const DROPBOX_REDIRECT_URI = `http://127.0.0.1:${DROPBOX_REDIRECT_PORT}/`;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Window state persistence (size/position/maximized). Saved to userData
+// rather than localStorage since it needs to be read back BEFORE the
+// BrowserWindow (and so the renderer) exists at all.
+// ─────────────────────────────────────────────────────────────────────────
+
+function windowStatePath() {
+  return path.join(app.getPath('userData'), 'window-state.json');
+}
+
+function loadWindowState() {
+  try {
+    const state = JSON.parse(fs.readFileSync(windowStatePath(), 'utf8'));
+    if (typeof state.width === 'number' && typeof state.height === 'number' && state.width > 0 && state.height > 0) {
+      return state;
+    }
+  } catch {
+    // No saved state yet (first launch), or the file is corrupt - fall back to defaults.
+  }
+  return null;
+}
+
+/** A saved x/y is only trusted if it still lands on a currently-connected display - otherwise a monitor that's since been unplugged could put the window off-screen forever. */
+function isVisibleOnSomeDisplay(bounds) {
+  return screen.getAllDisplays().some(display => {
+    const area = display.workArea;
+    return (
+      bounds.x < area.x + area.width &&
+      bounds.x + bounds.width > area.x &&
+      bounds.y < area.y + area.height &&
+      bounds.y + bounds.height > area.y
+    );
+  });
+}
+
+function saveWindowState(win) {
+  if (win.isDestroyed()) {
+    return;
+  }
+  const isMaximized = win.isMaximized();
+  // getNormalBounds() (not getBounds()) while maximized, so un-maximizing
+  // later restores the pre-maximize size instead of the full-screen one.
+  const bounds = isMaximized ? win.getNormalBounds() : win.getBounds();
+  try {
+    fs.writeFileSync(windowStatePath(), JSON.stringify({ ...bounds, isMaximized }), 'utf8');
+  } catch (err) {
+    console.warn('Failed to save window state:', err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Screenshot hotkey. Registered as a Menu accelerator (app-focused, not a
+// true OS-wide globalShortcut) rather than hooked in the renderer, so it
+// works from any screen without threading a capture request through the
+// game's own input handling.
+// ─────────────────────────────────────────────────────────────────────────
+
+async function saveScreenshot(win) {
+  try {
+    const image = await win.webContents.capturePage();
+    const screenshotsDir = path.join(app.getPath('pictures'), 'PokeRogue Offline');
+    fs.mkdirSync(screenshotsDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.join(screenshotsDir, `PokeRogueOffline-${timestamp}.png`);
+    fs.writeFileSync(filePath, image.toPNG());
+
+    if (Notification.isSupported()) {
+      new Notification({ title: 'Screenshot Saved', body: filePath }).show();
+    }
+  } catch (err) {
+    console.error('Screenshot failed:', err);
+    dialog.showMessageBox(win, { type: 'error', title: 'Screenshot Failed', message: String(err?.message ?? err) });
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Application menu. Edit and Window are dropped entirely (not useful for a
@@ -83,6 +158,12 @@ function buildAppMenu(win) {
           enabled: false,
           click: () => win.webContents.send('menu-check-for-updates'),
         },
+        { type: 'separator' },
+        {
+          label: 'Save Screenshot',
+          accelerator: 'F12',
+          click: () => saveScreenshot(win),
+        },
       ],
     },
   ];
@@ -117,15 +198,41 @@ function buildAppMenu(win) {
 }
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 720,
+  const savedState = loadWindowState();
+
+  const windowOptions = {
+    width: savedState?.width ?? 1280,
+    height: savedState?.height ?? 720,
     icon: path.join(__dirname, 'appIcon.ico'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
     },
+  };
+
+  if (savedState && typeof savedState.x === 'number' && typeof savedState.y === 'number' && isVisibleOnSomeDisplay(savedState)) {
+    windowOptions.x = savedState.x;
+    windowOptions.y = savedState.y;
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
+
+  if (savedState?.isMaximized) {
+    mainWindow.maximize();
+  }
+
+  // Debounced so dragging/resizing doesn't hammer the disk with a write per pixel.
+  let saveStateTimeout = null;
+  const scheduleSaveWindowState = () => {
+    clearTimeout(saveStateTimeout);
+    saveStateTimeout = setTimeout(() => saveWindowState(mainWindow), 500);
+  };
+  mainWindow.on('resize', scheduleSaveWindowState);
+  mainWindow.on('move', scheduleSaveWindowState);
+  mainWindow.on('close', () => {
+    clearTimeout(saveStateTimeout);
+    saveWindowState(mainWindow);
   });
 
   mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
