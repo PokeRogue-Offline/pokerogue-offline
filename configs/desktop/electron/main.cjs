@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -7,6 +7,11 @@ const https = require('https');
 const { registerUpdater } = require('./updater.cjs');
 
 let mainWindow;
+
+// Set by buildAppMenu() below; mutated by the 'title-screen-state' IPC
+// listener as the renderer's UI mode changes.
+let checkForUpdatesMenuItem = null;
+let menuIpcHandlersRegistered = false;
 
 // Substituted at build time via `sed` in build-exe.yml, sourced from GitHub
 // Secrets — same pattern already used for BUILD_NUMBER_PLACEHOLDER elsewhere
@@ -26,6 +31,91 @@ const DROPBOX_APP_KEY = 'DROPBOX_APP_KEY_PLACEHOLDER';
 const DROPBOX_REDIRECT_PORT = 53682;
 const DROPBOX_REDIRECT_URI = `http://127.0.0.1:${DROPBOX_REDIRECT_PORT}/`;
 
+// ─────────────────────────────────────────────────────────────────────────
+// Application menu. Edit and Window are dropped entirely (not useful for a
+// single-window game); View keeps reload/devtools/fullscreen but drops the
+// zoom controls, since the game itself disables user zoom and forces its
+// own layout back if resized. Tools is new: a couple of handy external
+// links, plus a manual "Check for Updates" that mirrors the automatic
+// title-screen check (see updater.cjs + patches/all/node/update-check.js).
+//
+// "Check for Updates" starts disabled and stays that way until the renderer
+// reports it's actually on the title screen (via 'title-screen-state',
+// pushed from title-ui-handler.ts) — deliberately fails closed: if that
+// signal never arrives, the item just never enables, rather than risking
+// popping the changelog overlay on top of an active run.
+// ─────────────────────────────────────────────────────────────────────────
+
+function buildAppMenu(win) {
+  const isMac = process.platform === 'darwin';
+
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    {
+      label: 'File',
+      submenu: [isMac ? { role: 'close' } : { role: 'quit' }],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Tools',
+      submenu: [
+        {
+          label: 'SandStorm PokeRogue Dex',
+          click: () => shell.openExternal('https://sandstormer.github.io/PokeRogue-Dex/'),
+        },
+        {
+          label: 'Type Help (pkmn.help)',
+          click: () => shell.openExternal('https://www.pkmn.help/offense/single/'),
+        },
+        { type: 'separator' },
+        {
+          id: 'check-for-updates',
+          label: 'Check for Updates',
+          enabled: false,
+          click: () => win.webContents.send('menu-check-for-updates'),
+        },
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+  checkForUpdatesMenuItem = menu.getMenuItemById('check-for-updates');
+
+  if (menuIpcHandlersRegistered) {
+    return;
+  }
+  menuIpcHandlersRegistered = true;
+
+  ipcMain.on('title-screen-state', (_event, isTitleScreen) => {
+    if (checkForUpdatesMenuItem) {
+      checkForUpdatesMenuItem.enabled = Boolean(isTitleScreen);
+    }
+  });
+
+  ipcMain.on('updater-check-result', (_event, result) => {
+    const MESSAGES = {
+      'up-to-date': { title: 'No Updates', message: "You're running the latest version." },
+      disabled: { title: 'Check for Updates', message: 'Update checks are disabled on dev/local builds.' },
+      error: {
+        title: 'Check for Updates',
+        message: 'Could not check for updates — check your internet connection and try again.',
+      },
+    };
+    const { title, message } = MESSAGES[result?.status] ?? MESSAGES.error;
+    dialog.showMessageBox(win, { type: 'info', title, message });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -44,6 +134,7 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   }
 
+  buildAppMenu(mainWindow);
   registerUpdater(mainWindow);
 }
 

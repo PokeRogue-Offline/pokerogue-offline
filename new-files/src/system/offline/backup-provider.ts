@@ -62,6 +62,11 @@ declare global {
       cancelDownload: () => void;
       onUpdateProgress: (callback: (progress: { received: number; total: number }) => void) => void;
       applyUpdateAndRelaunch: () => Promise<void>;
+      // Electron Tools-menu integration (main.cjs's "Check for Updates" item)
+      // - see patches/all/node/update-check.js for the only consumer.
+      notifyTitleScreenState: (isTitleScreen: boolean) => void;
+      onCheckForUpdatesRequested: (callback: () => void) => void;
+      reportUpdateCheckResult: (result: { status: "up-to-date" | "disabled" | "error" }) => void;
     };
   }
 }

@@ -22,6 +22,13 @@
  * own releases don't bump the (upstream-owned) app version at all, so the
  * build number is what actually distinguishes them (see update-check-api.ts).
  *
+ * Also starts the Electron Tools-menu integration (main.cjs's "Check for
+ * Updates" item): a polled "are we on the title screen" signal that enables/
+ * disables that menu item, and a manual check (ignores the once-per-launch
+ * guard and the "Update Pop-Ups" setting, reports back to main.cjs when
+ * there's nothing to show so it can pop a native dialog). No-ops entirely
+ * outside Electron.
+ *
  * Also adds a small "Update Available!" hint label under the version text.
  * This ALWAYS shows whenever an update is found, regardless of any setting,
  * and persists across return visits to the title screen within the same
@@ -174,6 +181,64 @@ const CONSTANTS_BLOCK =
   `  } catch {\n` +
   `    // Offline or GitHub API unreachable — fail silently.\n` +
   `  }\n` +
+  `}\n` +
+  `\n` +
+  `// update-check: Electron Tools-menu integration (main.cjs's "Check for\n` +
+  `// Updates" item). Started once (guarded) from the very first show() call -\n` +
+  `// keeps running for the rest of the session regardless of how many times\n` +
+  `// the title screen is re-entered later. No-ops entirely outside Electron\n` +
+  `// (window.pkrOffline is undefined on the web build).\n` +
+  `let hasStartedElectronMenuHooks = false;\n` +
+  `\n` +
+  `function startElectronMenuHooksOnce(hintText: Phaser.GameObjects.Text): void {\n` +
+  `  if (hasStartedElectronMenuHooks || typeof window === "undefined" || !window.pkrOffline) {\n` +
+  `    return;\n` +
+  `  }\n` +
+  `  hasStartedElectronMenuHooks = true;\n` +
+  `\n` +
+  `  // Polled rather than hooked into every UiHandler's show()/clear() - the\n` +
+  `  // Electron menu item is only ever enabled while this is actually true,\n` +
+  `  // so clicking it can never pop the changelog overlay on top of an\n` +
+  `  // active run. If getMode() ever stops matching this (e.g. renamed\n` +
+  `  // upstream), isTitleScreen just stays falsy forever - the menu item\n` +
+  `  // fails closed (permanently disabled), not open.\n` +
+  `  let wasTitleScreen: boolean | null = null;\n` +
+  `  setInterval(() => {\n` +
+  `    const isTitleScreen = globalScene.ui?.getMode?.() === UiMode.TITLE;\n` +
+  `    if (isTitleScreen !== wasTitleScreen) {\n` +
+  `      wasTitleScreen = isTitleScreen;\n` +
+  `      window.pkrOffline?.notifyTitleScreenState(isTitleScreen);\n` +
+  `    }\n` +
+  `  }, 500);\n` +
+  `\n` +
+  `  window.pkrOffline.onCheckForUpdatesRequested(() => {\n` +
+  `    manualCheckForUpdate(hintText);\n` +
+  `  });\n` +
+  `}\n` +
+  `\n` +
+  `// update-check: same check as checkForOfflineUpdate() above, but always\n` +
+  `// runs (ignores hasCheckedForUpdate and the "Update Pop-Ups" setting) and\n` +
+  `// reports back when there's nothing to show, so the Electron menu can pop\n` +
+  `// a native "you're up to date" dialog instead of silently doing nothing -\n` +
+  `// appropriate here since this is always a deliberate, user-initiated click.\n` +
+  `async function manualCheckForUpdate(hintText: Phaser.GameObjects.Text): Promise<void> {\n` +
+  `  if (OFFLINE_BUILD_NUMBER.includes("DEV")) {\n` +
+  `    window.pkrOffline?.reportUpdateCheckResult({ status: "disabled" });\n` +
+  `    return;\n` +
+  `  }\n` +
+  `\n` +
+  `  try {\n` +
+  `    const releases = await checkForUpdates(version, Number.parseInt(OFFLINE_BUILD_NUMBER, 10));\n` +
+  `    if (releases.length === 0) {\n` +
+  `      window.pkrOffline?.reportUpdateCheckResult({ status: "up-to-date" });\n` +
+  `      return;\n` +
+  `    }\n` +
+  `\n` +
+  `    hintText.setText("Update Available!");\n` +
+  `    globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases);\n` +
+  `  } catch {\n` +
+  `    window.pkrOffline?.reportUpdateCheckResult({ status: "error" });\n` +
+  `  }\n` +
   `}\n`;
 
 src = src.replace(IMPORT_ANCHOR, CONSTANTS_BLOCK);
@@ -195,7 +260,11 @@ const SHOW_REPLACEMENT =
   `${indent}if (isApp && !hasCheckedForUpdate) {\n` +
   `${indent}  hasCheckedForUpdate = true;\n` +
   `${indent}  checkForOfflineUpdate(this.updateAvailableHintText);\n` +
-  `${indent}}`;
+  `${indent}}\n` +
+  `\n` +
+  `${indent}// update-check: Electron Tools-menu integration - no-op after the\n` +
+  `${indent}// first call, no-op entirely outside Electron.\n` +
+  `${indent}startElectronMenuHooksOnce(this.updateAvailableHintText);`;
 
 src = src.replace(SHOW_ANCHOR_PATTERN, SHOW_REPLACEMENT);
 

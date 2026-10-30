@@ -41,4 +41,16 @@ contextBridge.exposeInMainWorld('pkrOffline', {
 
   /** Swaps the verified download into place and relaunches — only call after downloadUpdate() has resolved. */
   applyUpdateAndRelaunch: () => ipcRenderer.invoke('updater-apply-and-relaunch'),
+
+  /** Pushed whenever the title screen is entered/left, so main.cjs can enable/disable the Tools > Check for Updates menu item. */
+  notifyTitleScreenState: isTitleScreen => ipcRenderer.send('title-screen-state', isTitleScreen),
+
+  /** Fired when the Tools > Check for Updates menu item is clicked (only ever enabled while on the title screen). */
+  onCheckForUpdatesRequested: cb => {
+    ipcRenderer.removeAllListeners('menu-check-for-updates');
+    ipcRenderer.on('menu-check-for-updates', () => cb());
+  },
+
+  /** Lets main.cjs show a native dialog for the cases the Update Available screen itself has nothing to display for. */
+  reportUpdateCheckResult: result => ipcRenderer.send('updater-check-result', result),
 });
