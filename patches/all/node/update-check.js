@@ -206,14 +206,13 @@ const CONSTANTS_BLOCK =
   `  }\n` +
   `}\n` +
   `\n` +
-  `// update-check: best-effort reads of pokerogue's own public run-state API\n` +
-  `// (globalScene.currentBattle.waveIndex and globalScene.getPlayerParty() are\n` +
-  `// both already used elsewhere in this fork's own patches - see\n` +
-  `// prune-stale-pokemon-assets.js / prune-stale-move-anim-assets.js. The\n` +
-  `// run-type label and lead-Pokemon-name lookups below are each wrapped in\n` +
-  `// their own fallback chain since those two specific accessors aren't\n` +
-  `// otherwise exercised by this fork - if neither matches upstream's actual\n` +
-  `// API, the fallback ("Unknown"/null) is what shows up, not a crash.\n` +
+  `// update-check: reads of pokerogue's own public run-state API, verified\n` +
+  `// directly against upstream source (src/battle-scene.ts's\n` +
+  `// getPlayerParty()/currentBattle/gameMode, src/game-mode.ts's getName(),\n` +
+  `// src/field/pokemon.ts's getNameToRender()) rather than assumed. The\n` +
+  `// fallback chains below are kept anyway as cheap insurance against a\n` +
+  `// future upstream rename - if one ever breaks, the fallback\n` +
+  `// ("Unknown"/null) is what shows up, not a crash.\n` +
   `function getRunTypeLabel(gameMode: any): string {\n` +
   `  try {\n` +
   `    if (typeof gameMode?.getName === "function") {\n` +
@@ -288,8 +287,8 @@ const CONSTANTS_BLOCK =
   `  // Polled rather than hooked into every UiHandler's show()/clear() - the\n` +
   `  // Electron menu item is only ever enabled while this is actually true,\n` +
   `  // so clicking it can never pop the changelog overlay on top of an\n` +
-  `  // active run. If getMode() ever stops matching this (e.g. renamed\n` +
-  `  // upstream), isTitleScreen just stays falsy forever - the menu item\n` +
+  `  // active run. If this ever stops matching upstream (e.g. the getter is\n` +
+  `  // renamed), isTitleScreen just stays falsy forever - the menu item\n` +
   `  // fails closed (permanently disabled), not open.\n` +
   `  //\n` +
   `  // The same 500ms tick also drives Discord Rich Presence: re-reads the\n` +
@@ -302,7 +301,7 @@ const CONSTANTS_BLOCK =
   `  let wasDiscordEnabled: boolean | null = null;\n` +
   `  let lastPresenceJson: string | null = null;\n` +
   `  setInterval(() => {\n` +
-  `    const isTitleScreen = globalScene.ui?.getMode?.() === UiMode.TITLE;\n` +
+  `    const isTitleScreen = globalScene.ui?.mode === UiMode.TITLE;\n` +
   `    if (isTitleScreen !== wasTitleScreen) {\n` +
   `      wasTitleScreen = isTitleScreen;\n` +
   `      window.pkrOffline?.notifyTitleScreenState(isTitleScreen);\n` +
