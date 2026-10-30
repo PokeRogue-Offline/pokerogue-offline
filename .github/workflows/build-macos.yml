@@ -45,6 +45,9 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm
 
+      - name: Configure pnpm to avoid macOS hardlink EINVAL flake
+        run: pnpm config set package-import-method copy
+
       - name: Clone PokeRogue fork
         run: git clone --recurse-submodules --depth 1 --branch ${{ inputs.branch || 'main' }} https://github.com/pagefaultgames/pokerogue.git pokerogue-src
 
