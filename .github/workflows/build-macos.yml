@@ -174,7 +174,7 @@ jobs:
         # in-Electron self-updater downloads and swaps in directly (see
         # configs/desktop/electron/updater.cjs); the dmg stays the normal
         # first-install download.
-        run: pnpm electron-builder --mac dmg,tar.gz --${{ matrix.arch }} --publish never --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
+        run: pnpm electron-builder --mac dmg --mac tar.gz --${{ matrix.arch }} --publish never --config electron-builder.json --config.extraMetadata.version=${{ steps.old_ver.outputs.version }}
 
       - name: Rename and save DMG
         id: dmg_path
