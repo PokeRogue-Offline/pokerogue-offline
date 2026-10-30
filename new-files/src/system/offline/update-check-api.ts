@@ -5,6 +5,8 @@
  * newer than the one currently installed, oldest first.
  */
 
+import { isScoomDev } from "#system/offline/scooom-dev";
+
 const OWNER = "PokeRogue-Offline";
 const REPO = "pokerogue-offline";
 const RELEASES_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=100`;
@@ -12,6 +14,15 @@ const RELEASES_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per
 // Tags look like "v1.12.0.8-224" ({app version}-{CI build number}); a few
 // historical tags only have a 3-part version ("v1.11.22-189").
 const TAG_PATTERN = /^v(\d+\.\d+\.\d+(?:\.\d+)?)-(\d+)$/;
+
+// Dev releases are tagged "dev-v{version}-{build}" instead - see
+// mobile-updater.ts's "Dev release channel" doc comment for why this and the
+// prerelease filter below both key off isScoomDev the same way it does.
+const DEV_TAG_PATTERN = /^dev-v(\d+\.\d+\.\d+(?:\.\d+)?)-(\d+)$/;
+
+function tagPattern(): RegExp {
+  return isScoomDev ? DEV_TAG_PATTERN : TAG_PATTERN;
+}
 
 // Maintainers add real changelog text between these HTML comments by editing
 // the published GitHub release. create-release.yaml ships them pre-populated
@@ -102,8 +113,10 @@ async function fetchAllReleases(): Promise<GhRelease[]> {
 
   // A release is published prerelease:true and manually flipped off once
   // ready to go live - prerelease releases are treated the same as drafts
-  // and hidden from the updater until then.
-  return releases.filter(r => !r.draft && !r.prerelease);
+  // and hidden from the updater until then. Dev releases are always
+  // prerelease (never promoted) - dev-flagged builds must not filter them
+  // out, matching mobile-updater.ts's own fetchAllReleases().
+  return releases.filter(r => !r.draft && (isScoomDev || !r.prerelease));
 }
 
 /**
@@ -153,9 +166,10 @@ export async function checkForUpdates(
 ): Promise<ReleaseInfo[]> {
   const releases = await fetchAllReleases();
 
+  const pattern = tagPattern();
   const byVersion = new Map<string, ReleaseInfo>();
   for (const release of releases) {
-    const match = release.tag_name?.match(TAG_PATTERN);
+    const match = release.tag_name?.match(pattern);
     if (!match) {
       continue;
     }
