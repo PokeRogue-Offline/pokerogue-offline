@@ -35,10 +35,11 @@
  *          "Offline" settings tab: this is an offline-client-only feature,
  *          not present in the real locale files).
  *        - Add a switch-case that opens UiMode.GACHA_CALENDAR.
- *        - Add MenuOptions.GACHA_CALENDAR to the same two exclusion lists
- *          that already exclude MenuOptions.EGG_GACHA (title/command screen,
- *          and mid-battle SelectModifierPhase), so it's only ever offered
- *          in the same contexts Egg Gacha itself is offered in.
+ *        - Deliberately NOT added to the `dimmed: ...SelectModifierPhase...`
+ *          entry that greys out MenuOptions.EGG_GACHA/EGG_LIST while the
+ *          shop is open: unlike those two, this screen is read-only (no
+ *          save data or gameplay flow touched), so there's no reason to
+ *          block it mid-shop.
  *
  * NOTE ON TESTING: anchors below were confirmed against a fresh clone of
  * pagefaultgames/pokerogue at the time this was written. The new handler's
@@ -213,16 +214,14 @@ if (menuSrc.includes("GACHA_CALENDAR")) {
         break;`,
   );
 
-  // 4d. Exclusion list — hide it in the same contexts EGG_GACHA is hidden in.
-  // (Upstream now has a single excludedMenus entry covering EGG_GACHA/EGG_LIST;
-  // the separate title/command-screen exclusion list from earlier versions of
-  // this patch no longer exists.)
-  const EXCLUSION_ANCHOR = `options: [MenuOptions.EGG_GACHA, MenuOptions.EGG_LIST],`;
-  requireAnchor(menuSrc, EXCLUSION_ANCHOR, "constructor excludedMenus in menu-ui-handler.ts");
-  menuSrc = menuSrc.replace(
-    EXCLUSION_ANCHOR,
-    `options: [MenuOptions.EGG_GACHA, MenuOptions.EGG_LIST, MenuOptions.GACHA_CALENDAR],`,
-  );
+  // Deliberately no 4d here: upstream's single excludedMenus entry
+  // (`dimmed: ...SelectModifierPhase..., options: [MenuOptions.EGG_GACHA,
+  // MenuOptions.EGG_LIST]`) greys those two options out while the shop is
+  // open, since pulling eggs or viewing the pull queue mid-shop would be
+  // confusing/stateful. GACHA_CALENDAR is a read-only info screen with no
+  // interaction with the egg-pulling flow or save data, so it's left out of
+  // that list on purpose and stays selectable in every context Egg Gacha
+  // itself appears in, including mid-shop.
 
   writeFile(MENU_PATH, menuSrc);
 }
