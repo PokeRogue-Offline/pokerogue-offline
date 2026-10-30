@@ -63,6 +63,10 @@ jobs:
         working-directory: pokerogue-src
         run: pnpm install
 
+      - name: Run unit test suite
+        working-directory: pokerogue-src
+        run: pnpm test:silent
+
       - name: Install Electron dependencies
         working-directory: pokerogue-src
         run: pnpm add -D electron@43.0.0 electron-builder@26.15.3
