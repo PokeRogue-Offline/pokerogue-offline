@@ -564,16 +564,18 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Generate checksums
         if: ${{ steps.gate.outputs.is_release == 'true' || steps.gate.outputs.is_dev_release == 'true' }}
+        env:
+          TAG: ${{ steps.suffix.outputs.tag }}
         run: |
           sha256sum \
-            PokeRogueOffline.ipa \
-            PokeRogueOffline.apk \
-            PokeRogueOffline.AppImage \
-            PokeRogueOffline.exe \
-            PokeRogueOffline-x64.dmg \
-            PokeRogueOffline-arm64.dmg \
-            PokeRogueOffline-x64.app.tar.gz \
-            PokeRogueOffline-arm64.app.tar.gz \
+            "PokeRogueOffline${TAG}.ipa" \
+            "PokeRogueOffline${TAG}.apk" \
+            "PokeRogueOffline${TAG}.AppImage" \
+            "PokeRogueOffline${TAG}.exe" \
+            "PokeRogueOffline${TAG}-x64.dmg" \
+            "PokeRogueOffline${TAG}-arm64.dmg" \
+            "PokeRogueOffline${TAG}-x64.app.tar.gz" \
+            "PokeRogueOffline${TAG}-arm64.app.tar.gz" \
             PokeRogueOffline-Android-ota.zip \
             PokeRogueOffline-iOS-ota.zip \
             > SHA256SUMS.txt
@@ -612,14 +614,14 @@ jobs:
             - Build provenance for each binary is attested via GitHub Actions — verify with `gh attestation verify <file> --repo ${{ github.repository }}`
 
           files: |
-            PokeRogueOffline.ipa
-            PokeRogueOffline.apk
-            PokeRogueOffline.AppImage
-            PokeRogueOffline.exe
-            PokeRogueOffline-x64.dmg
-            PokeRogueOffline-arm64.dmg
-            PokeRogueOffline-x64.app.tar.gz
-            PokeRogueOffline-arm64.app.tar.gz
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}.ipa
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}.apk
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}.AppImage
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}.exe
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.dmg
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.dmg
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.app.tar.gz
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.app.tar.gz
             PokeRogueOffline-Android-ota.zip
             PokeRogueOffline-Android-ota-manifest.json
             PokeRogueOffline-iOS-ota.zip
