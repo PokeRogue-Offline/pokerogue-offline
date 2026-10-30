@@ -182,7 +182,7 @@ const CONSTANTS_BLOCK =
   `    hintText.setText("Update Available!");\n` +
   `\n` +
   `    if (updatePopUpsEnabled()) {\n` +
-  `      globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases);\n` +
+  `      globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases, version, Number.parseInt(OFFLINE_BUILD_NUMBER, 10));\n` +
   `    }\n` +
   `  } catch {\n` +
   `    // Offline or GitHub API unreachable — fail silently.\n` +
@@ -346,7 +346,7 @@ const CONSTANTS_BLOCK =
   `    }\n` +
   `\n` +
   `    hintText.setText("Update Available!");\n` +
-  `    globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases);\n` +
+  `    globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases, version, Number.parseInt(OFFLINE_BUILD_NUMBER, 10));\n` +
   `  } catch {\n` +
   `    window.pkrOffline?.reportUpdateCheckResult({ status: "error" });\n` +
   `  }\n` +

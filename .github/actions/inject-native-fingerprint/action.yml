@@ -1,0 +1,28 @@
+name: Inject native fingerprint
+description: >-
+  Substitutes NATIVE_FINGERPRINT_PLACEHOLDER with the real computed native
+  fingerprint (see scripts/compute-native-fingerprint.js). Used by the
+  Android/iOS build workflows, same placeholder-injection pattern as
+  inject-build-number-banner. Must run after the step that copies
+  mobile-updater.ts into pokerogue-src (apply-patches.sh's mobile-ota-
+  updater.js patch), since that's when the placeholder actually lands in the
+  tree.
+inputs:
+  fingerprint:
+    description: 'Computed native fingerprint to inject'
+    required: true
+  target-file:
+    description: 'File containing NATIVE_FINGERPRINT_PLACEHOLDER'
+    required: false
+    default: 'pokerogue-src/src/system/offline/mobile-updater.ts'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FINGERPRINT: ${{ inputs.fingerprint }}
+        FILE: ${{ inputs.target-file }}
+      run: |
+        source "${{ github.workspace }}/scripts/sed-lib.sh"
+        assert_sed "$FILE" NATIVE_FINGERPRINT_PLACEHOLDER
+        portable_sed_i "s/NATIVE_FINGERPRINT_PLACEHOLDER/${FINGERPRINT}/g" "$FILE"

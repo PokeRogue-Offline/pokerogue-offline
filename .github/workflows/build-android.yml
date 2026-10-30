@@ -38,6 +38,10 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Compute native fingerprint
+        id: native_fingerprint
+        run: echo "fingerprint=$(node scripts/compute-native-fingerprint.js android)" >> $GITHUB_OUTPUT
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -65,6 +69,11 @@ jobs:
           build-number: ${{ inputs.build_number || github.run_number }}
           dev: ${{ inputs.dev }}
 
+      - name: Inject native fingerprint
+        uses: ./.github/actions/inject-native-fingerprint
+        with:
+          fingerprint: ${{ steps.native_fingerprint.outputs.fingerprint }}
+
       - name: Inject Dropbox App Key and redirect URI
         uses: ./.github/actions/inject-dropbox-app-key
         with:
@@ -79,7 +88,8 @@ jobs:
       - name: Install Capacitor
         working-directory: pokerogue-src
         run: |
-            pnpm add @capacitor/core@8.4.1 @capacitor/cli@8.4.1 @capacitor/android@8.4.1 @capacitor/filesystem@8.1.2 @capacitor/share@8.0.1 @capacitor/status-bar@8.0.2 @capacitor/app@8.1.1 @capacitor/browser@8.0.4 @capgo/capacitor-social-login@8.3.33
+            source ${{ github.workspace }}/configs/capacitor-versions.env
+            pnpm add @capacitor/core@$CAPACITOR_CORE_VERSION @capacitor/cli@$CAPACITOR_CLI_VERSION @capacitor/android@$CAPACITOR_ANDROID_VERSION @capacitor/filesystem@$CAPACITOR_FILESYSTEM_VERSION @capacitor/share@$CAPACITOR_SHARE_VERSION @capacitor/status-bar@$CAPACITOR_STATUSBAR_VERSION @capacitor/app@$CAPACITOR_APP_VERSION @capacitor/browser@$CAPACITOR_BROWSER_VERSION @capgo/capacitor-social-login@$CAPACITOR_SOCIAL_LOGIN_VERSION fflate@$CAPACITOR_FFLATE_VERSION
 
       - name: Configure Capacitor
         working-directory: pokerogue-src
@@ -104,6 +114,30 @@ jobs:
       - name: Apply post-build patches
         run: bash ${{ github.workspace }}/scripts/apply-post-build-patches.sh android
 
+      - name: Build OTA web bundle
+        working-directory: pokerogue-src
+        run: zip -r ../ota-android.zip dist
+
+      - name: Write OTA manifest
+        run: |
+          BUILD_NUM=${{ inputs.build_number || github.run_number }}
+          VERSION="${{ steps.pokerogue_version.outputs.version }}"
+          OTA_SHA=$(sha256sum ota-android.zip | cut -d' ' -f1)
+          CHANNEL="stable"
+          if [ "${{ inputs.dev }}" = "true" ]; then
+            CHANNEL="dev"
+          fi
+          cat > ota-manifest-android.json <<EOF
+          {
+            "version": "$VERSION",
+            "buildNumber": $BUILD_NUM,
+            "nativeFingerprint": "${{ steps.native_fingerprint.outputs.fingerprint }}",
+            "otaBundleSha256": "$OTA_SHA",
+            "channel": "$CHANNEL"
+          }
+          EOF
+          cat ota-manifest-android.json
+
       - name: Add Android platform
         working-directory: pokerogue-src
         run: npx cap add android
@@ -115,10 +149,13 @@ jobs:
       - name: Copy static MainActivity
         working-directory: pokerogue-src
         run: |
-          DEST=$(find android/app/src/main/java -name "MainActivity.java" | head -n 1)
+          JAVA_DIR=$(dirname "$(find android/app/src/main/java -name "MainActivity.java" | head -n 1)")
+          DEST="$JAVA_DIR/MainActivity.java"
+          OTA_DEST="$JAVA_DIR/OtaBridgePlugin.java"
           cp ${{ github.workspace }}/configs/android/java/MainActivity.java "$DEST"
+          cp ${{ github.workspace }}/configs/android/java/OtaBridgePlugin.java "$OTA_DEST"
           if [ "${{ inputs.dev }}" = "true" ]; then
-            sed -i "s/^package xyz.scooom.pkr;/package xyz.scooom.pkrdev;/" "$DEST"
+            sed -i "s/^package xyz.scooom.pkr;/package xyz.scooom.pkrdev;/" "$DEST" "$OTA_DEST"
           fi
 
       - name: Patch AndroidManifest to prevent keyboard resize
@@ -133,8 +170,14 @@ jobs:
         working-directory: pokerogue-src
         run: |
           node ${{ github.workspace }}/patches/android/node/android-manifest-storage-permissions.js
+          node ${{ github.workspace }}/patches/android/node/android-manifest-install-permission.js
           echo "Contents of android/app/src/main/AndroidManifest.xml"
           cat android/app/src/main/AndroidManifest.xml
+
+      - name: Copy FileProvider path spec
+        run: |
+          mkdir -p pokerogue-src/android/app/src/main/res/xml
+          cp ${{ github.workspace }}/configs/android/res/xml/file_paths.xml pokerogue-src/android/app/src/main/res/xml/file_paths.xml
 
       - name: Copy app icon
         run: |
@@ -224,5 +267,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-Android${{ inputs.dev && '-dev' || '' }}
-          path: ${{ env.APK_NAME }}
+          path: |
+            ${{ env.APK_NAME }}
+            ota-android.zip
+            ota-manifest-android.json
           retention-days: 30
