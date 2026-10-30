@@ -34,6 +34,15 @@ const REPO = 'pokerogue-offline';
 // "v{app version}-{CI build number}".
 const TAG_PATTERN = /^v(\d+\.\d+\.\d+(?:\.\d+)?)-(\d+)$/;
 
+// Dev releases are tagged "dev-v{version}-{build}" instead - see
+// mobile-updater.ts's "Dev release channel" doc comment. This file is a
+// main-process CJS file, so it can't import #system/offline/scooom-dev.ts
+// (an ESM renderer-side module) the way update-check-api.ts/mobile-updater.ts
+// do - isDevBuild() below derives the same signal from the " DEV" suffix
+// inject-build-number-banner already appends to OFFLINE_BUILD_NUMBER for
+// dev builds.
+const DEV_TAG_PATTERN = /^dev-v(\d+\.\d+\.\d+(?:\.\d+)?)-(\d+)$/;
+
 // Duplicated from (not imported from) update-check-api.ts's own duplicate of
 // version-converter.ts's private extractVersion/compareVersions - that file
 // is a renderer-side ES module and this one is a main-process CJS file, so
@@ -68,16 +77,19 @@ function compareVersions(versionA, versionB) {
 // Reuses the exact same placeholder/injection mechanism as title-ui-handler.ts's
 // OFFLINE_BUILD_NUMBER (.github/actions/inject-build-number-banner, invoked a
 // second time against this file by the 3 desktop build workflows, after this
-// file is copied into pokerogue-src). Left unsubstituted (dev/local runs),
-// parseInt below yields NaN, so getInstalledBuildNumber() returns null and
-// update checks are skipped entirely - matching title-ui-handler.ts's own
-// "OFFLINE_BUILD_NUMBER.includes('DEV')" dev-build guard.
+// file is copied into pokerogue-src). Left unsubstituted (genuinely unbuilt/
+// local runs), parseInt below yields NaN, so getInstalledBuildNumber()
+// returns null and update checks are skipped entirely. CI dev builds DO get
+// a real (parseable) build number, just with " DEV" appended - isDevBuild()
+// below reads that same suffix to pick the dev-aware tag pattern/prerelease
+// filter, instead of skipping the check entirely like this used to.
 const OFFLINE_BUILD_NUMBER = 'BUILD_NUMBER_PLACEHOLDER';
 
+function isDevBuild() {
+  return OFFLINE_BUILD_NUMBER.includes('DEV');
+}
+
 function getInstalledBuildNumber() {
-  if (OFFLINE_BUILD_NUMBER.includes('DEV')) {
-    return null;
-  }
   const parsed = Number.parseInt(OFFLINE_BUILD_NUMBER, 10);
   return Number.isNaN(parsed) ? null : parsed;
 }
@@ -127,8 +139,10 @@ async function fetchAllReleases() {
     url = parseNextLink(response.headers.get('Link'));
   }
   // A release is published prerelease:true and manually flipped off once
-  // ready to go live - mirrors update-check-api.ts's own filter.
-  return releases.filter(r => !r.draft && !r.prerelease);
+  // ready to go live - mirrors update-check-api.ts's own filter. Dev
+  // releases are always prerelease (never promoted) - dev builds must not
+  // filter them out.
+  return releases.filter(r => !r.draft && (isDevBuild() || !r.prerelease));
 }
 
 /**
@@ -139,9 +153,10 @@ async function fetchAllReleases() {
  * of a changelog (the renderer-side screen already has that).
  */
 function findApplicableUpdate(releases, installedVersion, installedBuildNumber) {
+  const pattern = isDevBuild() ? DEV_TAG_PATTERN : TAG_PATTERN;
   const byVersion = new Map();
   for (const release of releases) {
-    const match = release.tag_name?.match(TAG_PATTERN);
+    const match = release.tag_name?.match(pattern);
     if (!match) {
       continue;
     }
@@ -169,14 +184,18 @@ function findApplicableUpdate(releases, installedVersion, installedBuildNumber) 
 }
 
 function pickAssetName() {
+  // Dev releases ship every asset under a "-dev" suffix (see
+  // create-release.yaml's "Set naming suffix" step) so they never collide
+  // with real releases on an automatic check (e.g. AltStore's).
+  const tag = isDevBuild() ? '-dev' : '';
   if (process.platform === 'win32') {
-    return 'PokeRogueOffline.exe';
+    return `PokeRogueOffline${tag}.exe`;
   }
   if (process.platform === 'linux') {
-    return 'PokeRogueOffline.AppImage';
+    return `PokeRogueOffline${tag}.AppImage`;
   }
   if (process.platform === 'darwin') {
-    return `PokeRogueOffline-${process.arch === 'arm64' ? 'arm64' : 'x64'}.app.tar.gz`;
+    return `PokeRogueOffline${tag}-${process.arch === 'arm64' ? 'arm64' : 'x64'}.app.tar.gz`;
   }
   return null;
 }

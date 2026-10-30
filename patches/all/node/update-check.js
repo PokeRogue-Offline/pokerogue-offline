@@ -16,11 +16,15 @@
  * OFFLINE_BUILD_NUMBER reuses the BUILD_NUMBER_PLACEHOLDER token - the
  * existing CI `sed` substitution (global, /g) already replaces every
  * occurrence of this token in the file, so no workflow changes are needed.
- * It's used to skip the check on dev/local builds
- * (OFFLINE_BUILD_NUMBER.includes("DEV")) and, once past that guard, as the
- * installed build number handed to checkForUpdates() - most of this fork's
- * own releases don't bump the (upstream-owned) app version at all, so the
- * build number is what actually distinguishes them (see update-check-api.ts).
+ * It's used to skip the check on genuinely unbuilt/local runs (the
+ * placeholder is left unsubstituted, so parsing it as a build number yields
+ * NaN) and, once past that guard, as the installed build number handed to
+ * checkForUpdates() - most of this fork's own releases don't bump the
+ * (upstream-owned) app version at all, so the build number is what actually
+ * distinguishes them (see update-check-api.ts). CI dev builds DO get a real
+ * (parseable) build number, just with " DEV" appended for the banner text -
+ * update-check-api.ts's own isScoomDev flag (not this guard) is what makes
+ * those releases, tagged "dev-v...", visible to the checker.
  *
  * Also starts the Electron Tools-menu integration (main.cjs's "Check for
  * Updates" item): a polled "are we on the title screen" signal that enables/
@@ -140,9 +144,11 @@ const CONSTANTS_BLOCK =
   `\n` +
   `// update-check: reuses the same build-number token offline-banner.js's\n` +
   `// placeholder substitutes, so CI's existing global sed replace covers this too.\n` +
-  `// Used both to skip dev/local builds entirely and as the installed build\n` +
-  `// number passed to checkForUpdates() (see #system/offline/update-check-api.ts),\n` +
-  `// which is compared when a release's app version matches ours exactly.\n` +
+  `// Used to skip genuinely unbuilt/local runs (unsubstituted placeholder, so\n` +
+  `// parseInt yields NaN - see checkForOfflineUpdate below) and as the\n` +
+  `// installed build number passed to checkForUpdates() (see\n` +
+  `// #system/offline/update-check-api.ts), which is compared when a release's\n` +
+  `// app version matches ours exactly.\n` +
   `const OFFLINE_BUILD_NUMBER = "BUILD_NUMBER_PLACEHOLDER";\n` +
   `let hasCheckedForUpdate = false;\n` +
   `\n` +
@@ -167,12 +173,13 @@ const CONSTANTS_BLOCK =
   `}\n` +
   `\n` +
   `async function checkForOfflineUpdate(hintText: Phaser.GameObjects.Text): Promise<void> {\n` +
-  `  if (OFFLINE_BUILD_NUMBER.includes("DEV")) {\n` +
+  `  const installedBuildNumber = Number.parseInt(OFFLINE_BUILD_NUMBER, 10);\n` +
+  `  if (Number.isNaN(installedBuildNumber)) {\n` +
   `    return;\n` +
   `  }\n` +
   `\n` +
   `  try {\n` +
-  `    const releases = await checkForUpdates(version, Number.parseInt(OFFLINE_BUILD_NUMBER, 10));\n` +
+  `    const releases = await checkForUpdates(version, installedBuildNumber);\n` +
   `    if (releases.length === 0) {\n` +
   `      return;\n` +
   `    }\n` +
@@ -182,7 +189,7 @@ const CONSTANTS_BLOCK =
   `    hintText.setText("Update Available!");\n` +
   `\n` +
   `    if (updatePopUpsEnabled()) {\n` +
-  `      globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases, version, Number.parseInt(OFFLINE_BUILD_NUMBER, 10));\n` +
+  `      globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases, version, installedBuildNumber);\n` +
   `    }\n` +
   `  } catch {\n` +
   `    // Offline or GitHub API unreachable — fail silently.\n` +
@@ -333,20 +340,21 @@ const CONSTANTS_BLOCK =
   `// a native "you're up to date" dialog instead of silently doing nothing -\n` +
   `// appropriate here since this is always a deliberate, user-initiated click.\n` +
   `async function manualCheckForUpdate(hintText: Phaser.GameObjects.Text): Promise<void> {\n` +
-  `  if (OFFLINE_BUILD_NUMBER.includes("DEV")) {\n` +
+  `  const installedBuildNumber = Number.parseInt(OFFLINE_BUILD_NUMBER, 10);\n` +
+  `  if (Number.isNaN(installedBuildNumber)) {\n` +
   `    window.pkrOffline?.reportUpdateCheckResult({ status: "disabled" });\n` +
   `    return;\n` +
   `  }\n` +
   `\n` +
   `  try {\n` +
-  `    const releases = await checkForUpdates(version, Number.parseInt(OFFLINE_BUILD_NUMBER, 10));\n` +
+  `    const releases = await checkForUpdates(version, installedBuildNumber);\n` +
   `    if (releases.length === 0) {\n` +
   `      window.pkrOffline?.reportUpdateCheckResult({ status: "up-to-date" });\n` +
   `      return;\n` +
   `    }\n` +
   `\n` +
   `    hintText.setText("Update Available!");\n` +
-  `    globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases, version, Number.parseInt(OFFLINE_BUILD_NUMBER, 10));\n` +
+  `    globalScene.ui.setOverlayMode(UiMode.UPDATE_AVAILABLE, releases, version, installedBuildNumber);\n` +
   `  } catch {\n` +
   `    window.pkrOffline?.reportUpdateCheckResult({ status: "error" });\n` +
   `  }\n` +
