@@ -143,7 +143,10 @@ function webViewPlugin(): any {
 
 /** Re-points the WebView at `path` via the stock setServerBasePath plugin method - the one real mechanism both OTA paths (stage+activate and boot-time reapply) share. */
 async function setBasePath(path: string): Promise<void> {
-  await webViewPlugin()?.setServerBasePath({ path });
+  const plugin = webViewPlugin();
+  console.log(`[mobile-updater] setBasePath(${path}) - WebView plugin ${plugin ? "found" : "NOT FOUND"}`);
+  await plugin?.setServerBasePath({ path });
+  console.log(`[mobile-updater] setBasePath(${path}) done`);
 }
 
 export type MobileUpdateKind = "ota" | "native-android" | "native-ios-notify-only";
@@ -507,6 +510,7 @@ async function downloadToFile(
 
 /** Downloads and verifies (never activates - see applyMobileUpdateAndRelaunch) whatever checkForMobileUpdate() last found applicable. */
 export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onProgress: (p: { received: number; total: number }) => void, signal: AbortSignal): Promise<void> {
+  console.log(`[mobile-updater] downloadMobileUpdate() called with kind="${result.kind}"`);
   if (result.kind === "native-ios-notify-only") {
     throw new Error("No downloadable update for this platform/release.");
   }
@@ -523,10 +527,13 @@ export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onPr
         onProgress,
         controller.signal,
       );
+      console.log(`[mobile-updater] downloadMobileUpdate: downloaded ${bytes.byteLength} bytes, verifying checksum`);
       const actualSha256 = await sha256Hex(bytes);
       if (actualSha256 !== result.otaBundleSha256) {
+        console.error(`[mobile-updater] downloadMobileUpdate: checksum mismatch - expected ${result.otaBundleSha256}, got ${actualSha256}`);
         throw new Error("Downloaded update failed checksum verification.");
       }
+      console.log(`[mobile-updater] downloadMobileUpdate: checksum OK, staged`);
       stagedOtaBytes = bytes;
       stagedOtaResult = result;
       return;
@@ -601,25 +608,44 @@ async function stageAndActivateOta(): Promise<void> {
 
   const { unzipSync } = await import("fflate");
   const entries = unzipSync(new Uint8Array(stagedOtaBytes));
+  console.log(`[mobile-updater] stageAndActivateOta: unzipped ${Object.keys(entries).length} entries, first few:`, Object.keys(entries).slice(0, 5));
 
   const versionDir = `${OTA_DIR}/${stagedOtaResult.version}-${stagedOtaResult.buildNumber}`;
+  console.log(`[mobile-updater] stageAndActivateOta: versionDir="${versionDir}"`);
 
   try {
     for (const [name, bytes] of Object.entries(entries)) {
       if (name.endsWith("/")) {
         continue;
       }
-      const filePath = `${versionDir}/${name}`;
+      // The OTA zip always wraps its contents in one top-level folder
+      // (build-ios.yml/build-android.yml's `zip -r ota.zip dist` zips the
+      // "dist" directory itself, not just what's inside it - confirmed
+      // against a real downloaded ota.zip, every single entry is prefixed
+      // "dist/") - strip that one leading path segment so versionDir's own
+      // root directly contains index.html, matching what setBasePath()/the
+      // native asset handler expects. Without this, every file silently
+      // lands one directory too deep (versionDir/dist/index.html instead of
+      // versionDir/index.html) and the WebView 404s looking for it at the
+      // path it was actually told to use.
+      const slashIndex = name.indexOf("/");
+      const relativeName = slashIndex === -1 ? name : name.slice(slashIndex + 1);
+      if (!relativeName) {
+        continue;
+      }
+      const filePath = `${versionDir}/${relativeName}`;
       await fs.writeFile({ path: filePath, data: new Blob([bytes as Uint8Array]), directory: "DATA", recursive: true });
     }
   } catch (err) {
     // Disk full / write failure mid-stage: abandon the partial directory,
     // never flip the pointer. The previously-active bundle keeps running.
+    console.error(`[mobile-updater] stageAndActivateOta: write failed, abandoning ${versionDir}:`, err);
     await fs.rmdir({ path: versionDir, directory: "DATA", recursive: true }).catch(() => {});
     throw err;
   }
 
   const { uri } = await fs.getUri({ path: versionDir, directory: "DATA" });
+  console.log(`[mobile-updater] stageAndActivateOta: staged at uri="${uri}"`);
 
   // This write is the point of no return - everything above is abandonable,
   // nothing below un-does it. bootAttempts starts at 0; the next launch's
@@ -632,14 +658,17 @@ async function stageAndActivateOta(): Promise<void> {
     bootAttempts: 0,
     confirmed: false,
   });
+  console.log(`[mobile-updater] stageAndActivateOta: active pointer written`);
 
   await setBasePath(uri);
 }
 
 /** OTA (either platform): stages+activates (see above) and reloads. Android native fallback: hands the downloaded APK to the system installer (does not install anything itself). iOS notify-only (native-touching releases only): always rejects. */
 export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResult): Promise<void> {
+  console.log(`[mobile-updater] applyMobileUpdateAndRelaunch() called with kind="${result.kind}"`);
   if (result.kind === "ota") {
     await stageAndActivateOta();
+    console.log(`[mobile-updater] applyMobileUpdateAndRelaunch: staged+activated, reloading now`);
     window.location.reload();
     return;
   }
@@ -682,9 +711,11 @@ export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResu
 export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
   const fs = filesystem();
   if (!fs) {
+    console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: no Filesystem plugin - bailing`);
     return;
   }
   const pointer = await readActivePointer(fs);
+  console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: active pointer =`, pointer);
   if (!pointer) {
     return;
   }
@@ -693,12 +724,14 @@ export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
     // This version never confirmed after repeated attempts - abandon it
     // and fall through to the bundled assets (always known-good) rather
     // than retrying something that doesn't start.
+    console.warn(`[mobile-updater] reapplyActiveOtaBundleIfAny: never confirmed after ${pointer.bootAttempts} attempts - abandoning, falling back to bundled assets`);
     await fs.rmdir({ path: `${OTA_DIR}/${pointer.version}-${pointer.buildNumber}`, directory: "DATA", recursive: true }).catch(() => {});
     await fs.deleteFile({ path: ACTIVE_POINTER_PATH, directory: "DATA" }).catch(() => {});
     return;
   }
 
   await writeActivePointer(fs, { ...pointer, bootAttempts: pointer.bootAttempts + 1 });
+  console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: reapplying setBasePath(${pointer.path}), bootAttempts now ${pointer.bootAttempts + 1}`);
   await setBasePath(pointer.path);
 }
 
