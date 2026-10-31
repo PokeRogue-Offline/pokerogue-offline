@@ -74,18 +74,53 @@ async function getOrCreateAlbumIdentifier(media: typeof import("@capacitor-commu
   return created.identifier;
 }
 
+const SAVE_TIMEOUT_MS = 15000;
+
+/**
+ * If the native @capacitor-community/media call never settles - a crash on
+ * the native side before it posts a result back across the bridge, or (seen
+ * in testing) a hang when there's no real Gallery/MediaStore provider to
+ * talk to - the plain `await saveToGallery(...)` in captureAndSaveScreenshot
+ * would never resolve or reject, so its `finally` never runs and `inFlight`
+ * stays true for the rest of the session: every later tap silently no-ops
+ * with nothing logged, looking exactly like the button stopped responding.
+ * Racing against a timeout guarantees settlement either way.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      err => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 async function saveToGallery(dataUrl: string): Promise<void> {
   const { Media } = await import("@capacitor-community/media");
-  const albumIdentifier = await getOrCreateAlbumIdentifier(Media);
-  await Media.savePhoto({
-    path: dataUrl,
-    albumIdentifier,
-    fileName: `pkroffline-${Date.now()}`,
-  });
+  await withTimeout(
+    (async () => {
+      const albumIdentifier = await getOrCreateAlbumIdentifier(Media);
+      await Media.savePhoto({
+        path: dataUrl,
+        albumIdentifier,
+        fileName: `pkroffline-${Date.now()}`,
+      });
+    })(),
+    SAVE_TIMEOUT_MS,
+    "Saving the screenshot timed out.",
+  );
 }
 
 /** Wired to the new touch-control button - see patches/mobile/node/screenshot-button.js. */
 export async function captureAndSaveScreenshot(): Promise<void> {
+  console.log(`[screenshot-saver] captureAndSaveScreenshot() called (isCapacitor=${isCapacitor()}, inFlight=${inFlight})`);
   if (!isCapacitor() || inFlight) {
     return;
   }

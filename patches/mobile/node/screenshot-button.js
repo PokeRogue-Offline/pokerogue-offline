@@ -155,9 +155,11 @@ if (touchControlsSrc.includes("wireScreenshotButton")) {
  */
 export function wireScreenshotButton(): void {
   const button = document.getElementById("apadScreenshot");
+  console.log(\`[touch-controls] wireScreenshotButton(): button element \${button ? "found" : "NOT FOUND"}\`);
   button?.addEventListener(
     "touchstart",
     (event: TouchEvent) => {
+      console.log("[touch-controls] apadScreenshot touchstart fired");
       event.preventDefault();
       captureAndSaveScreenshot();
     },
