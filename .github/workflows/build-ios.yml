@@ -175,6 +175,8 @@ jobs:
         working-directory: pokerogue-src
         env:
           GOOGLE_SCHEME: ${{ inputs.dev == 'true' && secrets.GOOGLE_IOS_DEV_REVERSED_CLIENT_ID || secrets.GOOGLE_IOS_REVERSED_CLIENT_ID }}
+          # Same iOS OAuth client IDs used above for the IOS_CLIENT_ID_PLACEHOLDER sed.
+          GOOGLE_CLIENT_ID: ${{ inputs.dev == 'true' && '856587427302-k9ns6u546mgn6vjv1mcks32mn76u1v01.apps.googleusercontent.com' || '856587427302-ejrsdp1qu750amcjupo943593vmeje1k.apps.googleusercontent.com' }}
           DROPBOX_SCHEME: ${{ inputs.dev == 'true' && 'xyz.scooom.pkrdev' || 'xyz.scooom.pkr' }}
         run: bash ${{ github.workspace }}/scripts/configure-ios-infoplist.sh ios/App/App/Info.plist
 

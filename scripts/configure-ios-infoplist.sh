@@ -11,10 +11,11 @@ set -e
 # a native-shell-affecting change made purely in build-ios.yml would have
 # silently bypassed the fingerprint entirely.
 #
-# GOOGLE_SCHEME and DROPBOX_SCHEME must be set in the environment by the
-# caller (build-ios.yml resolves which dev/prod secret or app id to use
-# before calling this script - that resolution stays in the workflow since
-# it depends on GitHub Secrets, not something this script should read).
+# GOOGLE_SCHEME, GOOGLE_CLIENT_ID and DROPBOX_SCHEME must be set in the
+# environment by the caller (build-ios.yml resolves which dev/prod secret or
+# app id to use before calling this script - that resolution stays in the
+# workflow since it depends on GitHub Secrets, not something this script
+# should read).
 
 PLIST="$1"
 
@@ -22,8 +23,8 @@ if [ -z "$PLIST" ]; then
   echo "Usage: $0 <path-to-Info.plist>" >&2
   exit 1
 fi
-if [ -z "$GOOGLE_SCHEME" ] || [ -z "$DROPBOX_SCHEME" ]; then
-  echo "ERROR: GOOGLE_SCHEME and DROPBOX_SCHEME must be set in the environment." >&2
+if [ -z "$GOOGLE_SCHEME" ] || [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$DROPBOX_SCHEME" ]; then
+  echo "ERROR: GOOGLE_SCHEME, GOOGLE_CLIENT_ID and DROPBOX_SCHEME must be set in the environment." >&2
   exit 1
 fi
 
@@ -69,6 +70,10 @@ fi
 /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string ${GOOGLE_SCHEME}" "$PLIST"
+# GIDClientID: required alongside the URL scheme above for GIDSignIn (used by
+# @capgo/capacitor-social-login) - without it, signing in with Google
+# hard-crashes the app on iOS instead of failing gracefully.
+/usr/libexec/PlistBuddy -c "Add :GIDClientID string ${GOOGLE_CLIENT_ID}" "$PLIST" || true
 
 # ── Register Dropbox OAuth URL scheme ────────────────────────────────────────
 /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:1 dict" "$PLIST"
