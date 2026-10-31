@@ -70,11 +70,16 @@ const INSTALLED_NATIVE_FINGERPRINT = "NATIVE_FINGERPRINT_PLACEHOLDER";
 // supported on iOS and Android - see webViewPlugin()/setBasePath() below.
 const IOS_OTA_CONFIRMED = true;
 
+// Written as a plain ternary, not an early-return if-block - the previous
+// form (if (X.includes("DEV") || X === "...PLACEHOLDER") return null; return
+// X;) got dead-code-folded by this project's bundler (Vite/Rolldown's oxc
+// minifier) into an unconditional `return null`, confirmed by decompiling an
+// actual shipped build: every OTA check silently treated the installed
+// fingerprint as missing, so the manifest was never even fetched. The
+// `.includes("DEV")` half was already dead weight anyway - a real SHA-256
+// hex digest can never contain "DEV" - so it's dropped entirely here.
 function getInstalledNativeFingerprint(): string | null {
-  if (INSTALLED_NATIVE_FINGERPRINT.includes("DEV") || INSTALLED_NATIVE_FINGERPRINT === "NATIVE_FINGERPRINT_PLACEHOLDER") {
-    return null;
-  }
-  return INSTALLED_NATIVE_FINGERPRINT;
+  return INSTALLED_NATIVE_FINGERPRINT === "NATIVE_FINGERPRINT_PLACEHOLDER" ? null : INSTALLED_NATIVE_FINGERPRINT;
 }
 
 function cap(): any {
