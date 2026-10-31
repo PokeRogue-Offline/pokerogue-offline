@@ -10,6 +10,8 @@
     "dist/**/*",
     "main.cjs",
     "preload.cjs",
+    "updater.cjs",
+    "discord-rpc.cjs",
     "appIcon.png",
     "node_modules/**/*"
   ]

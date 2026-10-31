@@ -20,6 +20,8 @@ release/
 # ── Capacitor / Android ─────────────────────────────────────────────────────
 android/
 !patches/android/
+!configs/android/
+!configs/capacitor-plugins/ota-unzip/android/
 *.apk
 *.aab
 *.keystore
@@ -27,6 +29,7 @@ android/
 
 # ── Capacitor / iOS ──────────────────────────────────────────────────────────
 ios/
+!configs/capacitor-plugins/ota-unzip/ios/
 *.ipa
 *.mobileprovision
 *.p12

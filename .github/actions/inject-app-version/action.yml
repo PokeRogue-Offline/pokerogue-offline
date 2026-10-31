@@ -1,0 +1,32 @@
+name: Inject real app version into updater.cjs
+description: >-
+  Substitutes APP_VERSION_PLACEHOLDER in updater.cjs with the real
+  dotted-numeric app version (e.g. "1.12.2.5") read from package.json.
+  Must run BEFORE get-electron-package-version, which rewrites
+  package.json's version field into electron-builder's mangled
+  "X.Y.ZW" form (see updater.cjs's getInstalledVersion() doc comment) -
+  reading package.json at runtime instead of baking the real version in
+  at build time would otherwise make the self-updater compare against
+  that mangled version and silently miss every update. Used by the 3
+  desktop (Electron) build workflows.
+inputs:
+  package-json-path:
+    description: 'Path to the package.json to read the real version from'
+    required: false
+    default: 'pokerogue-src/package.json'
+  target-file:
+    description: 'File containing APP_VERSION_PLACEHOLDER'
+    required: false
+    default: 'pokerogue-src/updater.cjs'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PKG: ${{ inputs.package-json-path }}
+        FILE: ${{ inputs.target-file }}
+      run: |
+        source "${{ github.workspace }}/scripts/sed-lib.sh"
+        VERSION=$(node -p "require('./$PKG').version")
+        assert_sed "$FILE" APP_VERSION_PLACEHOLDER
+        portable_sed_i "s/APP_VERSION_PLACEHOLDER/$(sed_escape "$VERSION")/g" "$FILE"

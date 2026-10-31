@@ -34,9 +34,9 @@ if [[ "$MEMORY_PATCHES_ENABLED" == "true" ]]; then
   apply_patch "prune-stale-pokemon-assets.js" all
   apply_patch "prune-stale-move-anim-assets.js" all
 fi
-# fix-stat-change-sprite-leak.js removed: the Phaser 4 rewrite (PR #7738,
-# merged to beta 2026-10-29) shipped the upstream fix itself - see
-# patches/all/node/fix-stat-change-sprite-leak.js's header comment.
+# Stopgap for pagefaultgames/pokerogue#7819 (closed, deferred to the Phaser 4
+# rewrite). Remove this line once that rewrite ships the fix upstream.
+apply_patch "fix-stat-change-sprite-leak.js"  all
 apply_patch "touch-overlay-idle-opacity.js"   all
 apply_patch "damage-preview.js"               all
 apply_patch "auto-drive-sync.js"              all
@@ -46,6 +46,16 @@ apply_patch "community-menu.js"               all
 apply_patch "enable-touch-controls-quad-tap.js" all
 
 apply_patch "update-available-screen.js" all
+# Copies in #system/offline/mobile-updater.ts and #ui/mobile-update-overlay.ts
+# and wires their runtime-gated (Capacitor.isNativePlatform()) hooks into
+# main.ts/title-ui-handler.ts, for ALL platforms, not just mobile - needed so
+# that update-available-ui-handler.ts (an all-platforms file) can statically
+# reference them without breaking desktop's bundling (Rolldown resolves
+# every static/dynamic import specifier at build time regardless of runtime
+# guards - see externalize-capacitor-imports.js's doc comment for the same
+# constraint hitting Capacitor npm packages). Every exported function in
+# both files already no-ops on non-Capacitor platforms.
+apply_patch "mobile-ota-updater.js"      all
 
 # ── Mobile (iOS + Android) ────────────────────────────────────────────────────
 if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
@@ -53,6 +63,7 @@ if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
   # Targeted Patches
   apply_patch "native-save-io.js"            mobile
   apply_patch "background-audio-pause.js"    mobile
+  apply_patch "screenshot-button.js"         mobile
   if [[ "$MEMORY_PATCHES_ENABLED" == "true" ]]; then
     apply_patch "skip-legacy-ui-duplicate-textures.js" mobile
   fi

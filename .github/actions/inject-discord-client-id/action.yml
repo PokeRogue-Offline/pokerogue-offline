@@ -1,0 +1,29 @@
+name: Inject Discord client ID
+description: >-
+  Substitutes DISCORD_CLIENT_ID_PLACEHOLDER in discord-rpc.cjs with the
+  given secret value. If the secret isn't set, the placeholder is left as-is
+  (discord-rpc.cjs checks for this and silently no-ops) so adding Discord
+  Rich Presence support is opt-in for maintainers, not a required setup step.
+inputs:
+  target-file:
+    description: 'File containing the placeholder'
+    required: true
+  discord-client-id:
+    description: 'Resolved Discord application (client) ID. Empty skips substitution entirely.'
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FILE: ${{ inputs.target-file }}
+        DISCORD_CLIENT_ID: ${{ inputs.discord-client-id }}
+      run: |
+        if [ -z "$DISCORD_CLIENT_ID" ]; then
+          echo "No Discord client ID secret configured - leaving discord-rpc.cjs's placeholder as-is (feature stays disabled)."
+          exit 0
+        fi
+        source "${{ github.workspace }}/scripts/sed-lib.sh"
+        assert_sed "$FILE" DISCORD_CLIENT_ID_PLACEHOLDER
+        portable_sed_i "s/DISCORD_CLIENT_ID_PLACEHOLDER/$(sed_escape "$DISCORD_CLIENT_ID")/g" "$FILE"

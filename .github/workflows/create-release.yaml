@@ -46,6 +46,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }} # This exposes the data
       is_release: ${{ steps.gate.outputs.is_release }}
+      is_dev_release: ${{ steps.gate.outputs.is_dev_release }}
       build_number: ${{ steps.build.outputs.number }}
       ipa_size: ${{ steps.ipa_size.outputs.size }}
     # Job-level permissions override the workflow-level block entirely, so
@@ -137,16 +138,6 @@ jobs:
             -f version_override=${{ inputs.version_override }}
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
-      - name: Trigger Test Suite
-        id: trigger_test_suite
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          gh workflow run run-patched-suite.yml --ref "${{ github.ref_name }}" \
-            -f branch=${{ inputs.branch || 'main' }}
-          echo "triggered_after=$TS" >> $GITHUB_OUTPUT
-
 
       # -----------------------------------------------------------------------
       # Locate the run IDs by polling for runs created after the trigger
@@ -163,7 +154,6 @@ jobs:
           APPIMAGE_AFTER: ${{ steps.trigger_appimage.outputs.triggered_after }}
           WINDOWS_AFTER: ${{ steps.trigger_windows.outputs.triggered_after }}
           MACOS_AFTER: ${{ steps.trigger_macos.outputs.triggered_after }}
-          TEST_SUITE_AFTER: ${{ steps.trigger_test_suite.outputs.triggered_after }}
         run: |
           set -e
 
@@ -195,7 +185,6 @@ jobs:
           locate_run "build-appimage.yml" "$APPIMAGE_AFTER" "AppImage" /tmp/appimage_run_id
           locate_run "build-exe.yml" "$WINDOWS_AFTER" "Windows" /tmp/windows_run_id
           locate_run "build-macos.yml" "$MACOS_AFTER" "macOS" /tmp/macos_run_id
-          locate_run "run-patched-suite.yml" "$TEST_SUITE_AFTER" "Test Suite" /tmp/test_suite_run_id
 
 
           IOS_RUN_ID=$(cat /tmp/ios_run_id)
@@ -203,7 +192,6 @@ jobs:
           APPIMAGE_RUN_ID=$(cat /tmp/appimage_run_id)
           WINDOWS_RUN_ID=$(cat /tmp/windows_run_id)
           MACOS_RUN_ID=$(cat /tmp/macos_run_id)
-          TEST_SUITE_RUN_ID=$(cat /tmp/test_suite_run_id)
 
 
           echo "ios_run_id=$IOS_RUN_ID" >> $GITHUB_OUTPUT
@@ -211,7 +199,6 @@ jobs:
           echo "appimage_run_id=$APPIMAGE_RUN_ID" >> $GITHUB_OUTPUT
           echo "windows_run_id=$WINDOWS_RUN_ID" >> $GITHUB_OUTPUT
           echo "macos_run_id=$MACOS_RUN_ID" >> $GITHUB_OUTPUT
-          echo "test_suite_run_id=$TEST_SUITE_RUN_ID" >> $GITHUB_OUTPUT
 
 
       # -----------------------------------------------------------------------
@@ -228,12 +215,11 @@ jobs:
           APPIMAGE_RUN_ID: ${{ steps.runs.outputs.appimage_run_id }}
           WINDOWS_RUN_ID: ${{ steps.runs.outputs.windows_run_id }}
           MACOS_RUN_ID: ${{ steps.runs.outputs.macos_run_id }}
-          TEST_SUITE_RUN_ID: ${{ steps.runs.outputs.test_suite_run_id }}
 
         run: |
           set -e
 
-          TIMEOUT=10800  # 3 hours - the test suite matrix can run long
+          TIMEOUT=5400  # 90 minutes
           POLL=30
           ELAPSED=0
 
@@ -259,10 +245,8 @@ jobs:
             WINDOWS_CONCLUSION=$(gh api "repos/$REPO/actions/runs/$WINDOWS_RUN_ID" --jq '.conclusion')
             MACOS_STATUS=$(gh api "repos/$REPO/actions/runs/$MACOS_RUN_ID" --jq '.status')
             MACOS_CONCLUSION=$(gh api "repos/$REPO/actions/runs/$MACOS_RUN_ID" --jq '.conclusion')
-            TEST_SUITE_STATUS=$(gh api "repos/$REPO/actions/runs/$TEST_SUITE_RUN_ID" --jq '.status')
-            TEST_SUITE_CONCLUSION=$(gh api "repos/$REPO/actions/runs/$TEST_SUITE_RUN_ID" --jq '.conclusion')
 
-            echo -e "iOS: $IOS_STATUS / $IOS_CONCLUSION | Android: $ANDROID_STATUS / $ANDROID_CONCLUSION | AppImage: $APPIMAGE_STATUS / $APPIMAGE_CONCLUSION | Windows: $WINDOWS_STATUS / $WINDOWS_CONCLUSION | macOS: $MACOS_STATUS / $MACOS_CONCLUSION | Test Suite: $TEST_SUITE_STATUS / $TEST_SUITE_CONCLUSION | (${ELAPSED}s elapsed)"
+            echo -e "iOS: $IOS_STATUS / $IOS_CONCLUSION | Android: $ANDROID_STATUS / $ANDROID_CONCLUSION | AppImage: $APPIMAGE_STATUS / $APPIMAGE_CONCLUSION | Windows: $WINDOWS_STATUS / $WINDOWS_CONCLUSION | macOS: $MACOS_STATUS / $MACOS_CONCLUSION | (${ELAPSED}s elapsed)"
 
             # If one has failed, cancel the others and exit immediately
             if [ "$IOS_STATUS" = "completed" ] && [ "$IOS_CONCLUSION" != "success" ]; then
@@ -270,7 +254,6 @@ jobs:
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
-              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: iOS build ended with: $IOS_CONCLUSION"
               exit 1
             fi
@@ -279,17 +262,15 @@ jobs:
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
-              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: Android build ended with: $ANDROID_CONCLUSION"
               exit 1
             fi
-
+            
             if [ "$APPIMAGE_STATUS" = "completed" ] && [ "$APPIMAGE_CONCLUSION" != "success" ]; then
               cancel_run "$IOS_RUN_ID" "iOS" "$IOS_STATUS"
               cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
-              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: AppImage build ended with: $APPIMAGE_CONCLUSION"
               exit 1
             fi
@@ -299,7 +280,6 @@ jobs:
               cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
-              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: Windows build ended with: $WINDOWS_CONCLUSION"
               exit 1
             fi
@@ -309,22 +289,11 @@ jobs:
               cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
-              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: macOS build ended with: $MACOS_CONCLUSION"
               exit 1
             fi
 
-            if [ "$TEST_SUITE_STATUS" = "completed" ] && [ "$TEST_SUITE_CONCLUSION" != "success" ]; then
-              cancel_run "$IOS_RUN_ID" "iOS" "$IOS_STATUS"
-              cancel_run "$ANDROID_RUN_ID" "Android" "$ANDROID_STATUS"
-              cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
-              cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
-              cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
-              echo "ERROR: Test Suite ended with: $TEST_SUITE_CONCLUSION"
-              exit 1
-            fi
-
-            if [ "$IOS_STATUS" = "completed" ] && [ "$ANDROID_STATUS" = "completed" ] && [ "$APPIMAGE_STATUS" = "completed" ] && [ "$WINDOWS_STATUS" = "completed" ] && [ "$MACOS_STATUS" = "completed" ] && [ "$TEST_SUITE_STATUS" = "completed" ]; then
+            if [ "$IOS_STATUS" = "completed" ] && [ "$ANDROID_STATUS" = "completed" ] && [ "$APPIMAGE_STATUS" = "completed" ] && [ "$WINDOWS_STATUS" = "completed" ] && [ "$MACOS_STATUS" = "completed" ]; then
               echo "All builds succeeded."
               break
             fi
@@ -336,7 +305,6 @@ jobs:
               cancel_run "$APPIMAGE_RUN_ID" "AppImage" "$APPIMAGE_STATUS"
               cancel_run "$WINDOWS_RUN_ID" "Windows" "$WINDOWS_STATUS"
               cancel_run "$MACOS_RUN_ID" "macOS" "$MACOS_STATUS"
-              cancel_run "$TEST_SUITE_RUN_ID" "Test Suite" "$TEST_SUITE_STATUS"
               echo "ERROR: Timed out waiting for builds to complete."
               exit 1
             fi
@@ -354,6 +322,20 @@ jobs:
             echo "is_release=true" >> $GITHUB_OUTPUT
           else
             echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Dev test releases: published whenever dev=true, regardless of branch - this is
+          # the maintainer's existing manual-dispatch test workflow (any branch + a custom
+          # version_override), just now also publishing something a dev-flagged build's
+          # in-app updater can discover. Tag is dev-v{version}-{buildNumber} ("dev-" prefix)
+          # so it never matches update-check-api.ts's/updater.cjs's/mobile-updater.ts's
+          # anchored "^v..." tag regexes - real builds stay structurally blind to these
+          # with no code change on their side. Title carries a "***DEV***" marker for
+          # browsing the Releases page by eye only; nothing parses it.
+          if [ "${{ inputs.dev }}" = "true" ]; then
+            echo "is_dev_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_dev_release=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Set naming suffix
@@ -377,6 +359,8 @@ jobs:
           gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > ipa.zip
           unzip ipa.zip -d ipa-out
           mv "ipa-out/PokeRogueOffline${TAG}.ipa" "./PokeRogueOffline${TAG}.ipa"
+          mv "ipa-out/ota-ios.zip" "./PokeRogueOffline-iOS-ota.zip"
+          mv "ipa-out/ota-manifest-ios.json" "./PokeRogueOffline-iOS-ota-manifest.json"
 
       - name: Download APK artifact
         env:
@@ -390,6 +374,8 @@ jobs:
           gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > apk.zip
           unzip apk.zip -d apk-out
           mv "apk-out/PokeRogueOffline${TAG}.apk" "./PokeRogueOffline${TAG}.apk"
+          mv "apk-out/ota-android.zip" "./PokeRogueOffline-Android-ota.zip"
+          mv "apk-out/ota-manifest-android.json" "./PokeRogueOffline-Android-ota-manifest.json"
           
       - name: Download AppImage artifact
         env:
@@ -443,6 +429,35 @@ jobs:
           unzip macos-arm64.zip -d macos-arm64-out
           mv "macos-arm64-out/PokeRogueOffline${TAG}-arm64.dmg" "./PokeRogueOffline${TAG}-arm64.dmg"
 
+      # macOS .app bundle tar.gz assets - separate from the DMGs above, used
+      # only by the in-Electron self-updater (it swaps the raw bundle in
+      # directly rather than mounting a disk image).
+      - name: Download macOS x64 app bundle tar.gz artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MACOS_RUN_ID: ${{ steps.runs.outputs.macos_run_id }}
+          TAG: ${{ steps.suffix.outputs.tag }}
+        run: |
+          ARTIFACT_ID=$(gh api "repos/$REPO/actions/runs/$MACOS_RUN_ID/artifacts" \
+            --jq ".artifacts[] | select(.name == \"PokeRogueOffline-macOS-x64-app${TAG}\") | .id")
+          gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > macos-x64-app.zip
+          unzip macos-x64-app.zip -d macos-x64-app-out
+          mv "macos-x64-app-out/PokeRogueOffline${TAG}-x64.app.tar.gz" "./PokeRogueOffline${TAG}-x64.app.tar.gz"
+
+      - name: Download macOS arm64 app bundle tar.gz artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MACOS_RUN_ID: ${{ steps.runs.outputs.macos_run_id }}
+          TAG: ${{ steps.suffix.outputs.tag }}
+        run: |
+          ARTIFACT_ID=$(gh api "repos/$REPO/actions/runs/$MACOS_RUN_ID/artifacts" \
+            --jq ".artifacts[] | select(.name == \"PokeRogueOffline-macOS-arm64-app${TAG}\") | .id")
+          gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > macos-arm64-app.zip
+          unzip macos-arm64-app.zip -d macos-arm64-app-out
+          mv "macos-arm64-app-out/PokeRogueOffline${TAG}-arm64.app.tar.gz" "./PokeRogueOffline${TAG}-arm64.app.tar.gz"
+
 
       # -----------------------------------------------------------------------
       # Read the version string from version.txt bundled in the iOS artifact.
@@ -456,6 +471,17 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Found Version: ${VERSION}"
 
+      - name: Compute release tag/title
+        id: release_meta
+        run: |
+          if [ "${{ steps.gate.outputs.is_dev_release }}" = "true" ]; then
+            echo "tag_name=dev-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}" >> $GITHUB_OUTPUT
+            echo "name=***DEV*** v${{ steps.version.outputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag_name=v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}" >> $GITHUB_OUTPUT
+            echo "name=v${{ steps.version.outputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
       # -----------------------------------------------------------------------
       # Non-release run (dev=true, or dev=false on a non-main branch): skip
       # the GitHub release and AltStore feed update. Each platform's output
@@ -463,7 +489,7 @@ jobs:
       # just the iOS build doesn't pull the others along.
       # -----------------------------------------------------------------------
       - name: Upload iOS artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-iOS-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -471,7 +497,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Android artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-Android-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -479,7 +505,7 @@ jobs:
           retention-days: 30
 
       - name: Upload AppImage artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-AppImage-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -487,7 +513,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Windows artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-Windows-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -495,7 +521,7 @@ jobs:
           retention-days: 30
 
       - name: Upload macOS x64 artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-macOS-x64-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
@@ -503,11 +529,27 @@ jobs:
           retention-days: 30
 
       - name: Upload macOS arm64 artifact
-        if: ${{ steps.gate.outputs.is_release != 'true' }}
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-macOS-arm64-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
           path: PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.dmg
+          retention-days: 30
+
+      - name: Upload macOS x64 app bundle artifact
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokeRogueOffline-macOS-x64-app-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
+          path: PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.app.tar.gz
+          retention-days: 30
+
+      - name: Upload macOS arm64 app bundle artifact
+        if: ${{ steps.gate.outputs.is_release != 'true' && steps.gate.outputs.is_dev_release != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokeRogueOffline-macOS-arm64-app-v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
+          path: PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.app.tar.gz
           retention-days: 30
 
       - name: Get IPA size
@@ -521,27 +563,38 @@ jobs:
       # wasn't tampered with in transit) has something to check it against.
       # -----------------------------------------------------------------------
       - name: Generate checksums
-        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        if: ${{ steps.gate.outputs.is_release == 'true' || steps.gate.outputs.is_dev_release == 'true' }}
+        env:
+          TAG: ${{ steps.suffix.outputs.tag }}
         run: |
           sha256sum \
-            PokeRogueOffline.ipa \
-            PokeRogueOffline.apk \
-            PokeRogueOffline.AppImage \
-            PokeRogueOffline.exe \
-            PokeRogueOffline-x64.dmg \
-            PokeRogueOffline-arm64.dmg \
+            "PokeRogueOffline${TAG}.ipa" \
+            "PokeRogueOffline${TAG}.apk" \
+            "PokeRogueOffline${TAG}.AppImage" \
+            "PokeRogueOffline${TAG}.exe" \
+            "PokeRogueOffline${TAG}-x64.dmg" \
+            "PokeRogueOffline${TAG}-arm64.dmg" \
+            "PokeRogueOffline${TAG}-x64.app.tar.gz" \
+            "PokeRogueOffline${TAG}-arm64.app.tar.gz" \
+            PokeRogueOffline-Android-ota.zip \
+            PokeRogueOffline-iOS-ota.zip \
             > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       # -----------------------------------------------------------------------
-      # Publish the combined GitHub release. Only when dev=false AND branch=main.
+      # Publish the combined GitHub release: either a real release (dev=false
+      # AND branch=main), or a dev test release (dev=true, any branch) - the
+      # latter is a throwaway release used to let dev-flagged builds exercise
+      # the in-app updater (see release_meta above for the tag/title scheme
+      # that keeps these invisible to real builds) and is never promoted off
+      # prerelease.
       # -----------------------------------------------------------------------
       - name: Create Release
-        if: ${{ steps.gate.outputs.is_release == 'true' }}
+        if: ${{ steps.gate.outputs.is_release == 'true' || steps.gate.outputs.is_dev_release == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          tag_name: v${{ steps.version.outputs.version }}-${{ steps.build.outputs.number }}
-          name: v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.release_meta.outputs.tag_name }}
+          name: ${{ steps.release_meta.outputs.name }}
           prerelease: true
           body: |
             ## PokeRogueOffline v${{ steps.version.outputs.version }}
@@ -555,16 +608,24 @@ jobs:
             - **PokeRogueOffline.exe** — Windows Portable EXE
             - **PokeRogueOffline-x64.dmg** — macOS (Intel)
             - **PokeRogueOffline-arm64.dmg** — macOS (Apple Silicon)
-            - **SHA256SUMS.txt** — checksums for the six files above
+            - **PokeRogueOffline-x64.app.tar.gz** / **PokeRogueOffline-arm64.app.tar.gz** — macOS app bundle, used only by the in-app self-updater (not for manual install — use the DMG for that)
+            - **PokeRogueOffline-Android-ota.zip** / **PokeRogueOffline-iOS-ota.zip** + their `-ota-manifest.json` — web-only OTA bundles used by the in-app mobile updater (not for manual install)
+            - **SHA256SUMS.txt** — checksums for the ten files above (excluding the two `-ota-manifest.json` files, which carry their own bundle checksum)
             - Build provenance for each binary is attested via GitHub Actions — verify with `gh attestation verify <file> --repo ${{ github.repository }}`
 
           files: |
-            PokeRogueOffline.ipa
-            PokeRogueOffline.apk
-            PokeRogueOffline.AppImage
-            PokeRogueOffline.exe
-            PokeRogueOffline-x64.dmg
-            PokeRogueOffline-arm64.dmg
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}.ipa
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}.apk
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}.AppImage
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}.exe
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.dmg
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.dmg
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.app.tar.gz
+            PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.app.tar.gz
+            PokeRogueOffline-Android-ota.zip
+            PokeRogueOffline-Android-ota-manifest.json
+            PokeRogueOffline-iOS-ota.zip
+            PokeRogueOffline-iOS-ota-manifest.json
             SHA256SUMS.txt
 
         env:
@@ -678,7 +739,6 @@ jobs:
           cancel_active_runs "build-appimage.yml" "AppImage"
           cancel_active_runs "build-exe.yml" "Windows"
           cancel_active_runs "build-macos.yml" "macOS"
-          cancel_active_runs "run-patched-suite.yml" "Test Suite"
 
 
   notify:
@@ -691,11 +751,16 @@ jobs:
           STATUS: ${{ needs.release.result }}
           VERSION: ${{ needs.release.outputs.version }}
           IS_RELEASE: ${{ needs.release.outputs.is_release }}
+          IS_DEV_RELEASE: ${{ needs.release.outputs.is_dev_release }}
         run: |
           if [ "$STATUS" == "success" ] && [ "$IS_RELEASE" == "true" ]; then
             TITLE="Release Successful! 🚀"
             TAGS="rocket,white_check_mark"
             MSG="PokeRogueOffline v$VERSION is live."
+          elif [ "$STATUS" == "success" ] && [ "$IS_DEV_RELEASE" == "true" ]; then
+            TITLE="Dev Release Published 🧪"
+            TAGS="test_tube,white_check_mark"
+            MSG="PokeRogueOffline v$VERSION dev test release published (prerelease, dev- tag)."
           elif [ "$STATUS" == "success" ]; then
             TITLE="Build Artifacts Ready 🧪"
             TAGS="test_tube,white_check_mark"

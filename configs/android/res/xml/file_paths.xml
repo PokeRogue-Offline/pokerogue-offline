@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider path spec for OtaBridgePlugin.installApk - the downloaded APK
+  is written to the app's cache dir (Directory.Cache via @capacitor/filesystem)
+  before being handed to the system installer, so only that directory needs
+  to be exposed here.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res-auto">
+    <cache-path name="apk" path="." />
+</paths>

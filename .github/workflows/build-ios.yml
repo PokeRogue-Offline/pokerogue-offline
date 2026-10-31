@@ -38,6 +38,10 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Compute native fingerprint
+        id: native_fingerprint
+        run: echo "fingerprint=$(node scripts/compute-native-fingerprint.js ios)" >> $GITHUB_OUTPUT
+
       - name: Install pnpm
         run: npm install -g pnpm
 
@@ -59,8 +63,13 @@ jobs:
           build-number: ${{ inputs.build_number || github.run_number }}
           dev: ${{ inputs.dev }}
 
+      - name: Inject native fingerprint
+        uses: ./.github/actions/inject-native-fingerprint
+        with:
+          fingerprint: ${{ steps.native_fingerprint.outputs.fingerprint }}
+
       - name: Inject Scooom-dev banner suffix
-        if: ${{ inputs.dev == 'true' }}
+        if: ${{ inputs.dev }}
         run: |
           source ${{ github.workspace }}/scripts/sed-lib.sh
           FILE=pokerogue-src/src/ui/handlers/title-ui-handler.ts
@@ -82,8 +91,8 @@ jobs:
         uses: ./.github/actions/inject-dropbox-app-key
         with:
           target-file: pokerogue-src/src/system/offline/dropbox-backup.ts
-          dropbox-app-key: ${{ inputs.dev == 'true' && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
-          redirect-uri: ${{ inputs.dev == 'true' && 'xyz.scooom.pkrdev://dropbox-auth-callback' || 'xyz.scooom.pkr://dropbox-auth-callback' }}
+          dropbox-app-key: ${{ inputs.dev && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
+          redirect-uri: ${{ inputs.dev && 'xyz.scooom.pkrdev://dropbox-auth-callback' || 'xyz.scooom.pkr://dropbox-auth-callback' }}
 
       - name: Install PokeRogue dependencies
         working-directory: pokerogue-src
@@ -92,7 +101,8 @@ jobs:
       - name: Install Capacitor
         working-directory: pokerogue-src
         run: |
-          pnpm add @capacitor/core@8.4.1 @capacitor/cli@8.4.1 @capacitor/ios@8.4.1 @capacitor/filesystem@8.1.2 @capacitor/share@8.0.1 @capacitor/status-bar@8.0.2 @capacitor/app@8.1.1 @capacitor/browser@8.0.4 @capgo/capacitor-social-login@8.3.33
+          source ${{ github.workspace }}/configs/capacitor-versions.env
+          pnpm add @capacitor/core@$CAPACITOR_CORE_VERSION @capacitor/cli@$CAPACITOR_CLI_VERSION @capacitor/ios@$CAPACITOR_IOS_VERSION @capacitor/filesystem@$CAPACITOR_FILESYSTEM_VERSION @capacitor/share@$CAPACITOR_SHARE_VERSION @capacitor/status-bar@$CAPACITOR_STATUSBAR_VERSION @capacitor/app@$CAPACITOR_APP_VERSION @capacitor/browser@$CAPACITOR_BROWSER_VERSION @capgo/capacitor-social-login@$CAPACITOR_SOCIAL_LOGIN_VERSION @capacitor-community/media@$CAPACITOR_COMMUNITY_MEDIA_VERSION @capacitor/file-transfer@$CAPACITOR_FILE_TRANSFER_VERSION file:${{ github.workspace }}/configs/capacitor-plugins/ota-unzip
 
       - name: Configure Capacitor
         working-directory: pokerogue-src
@@ -118,6 +128,30 @@ jobs:
       - name: Apply post-build patches
         run: bash ${{ github.workspace }}/scripts/apply-post-build-patches.sh mobile
 
+      - name: Build OTA web bundle
+        working-directory: pokerogue-src
+        run: zip -r ../ota-ios.zip dist
+
+      - name: Write OTA manifest
+        run: |
+          BUILD_NUM=${{ inputs.build_number || github.run_number }}
+          VERSION="${{ steps.pokerogue_version.outputs.version }}"
+          OTA_SHA=$(shasum -a 256 ota-ios.zip | cut -d' ' -f1)
+          CHANNEL="stable"
+          if [ "${{ inputs.dev }}" = "true" ]; then
+            CHANNEL="dev"
+          fi
+          cat > ota-manifest-ios.json <<EOF
+          {
+            "version": "$VERSION",
+            "buildNumber": $BUILD_NUM,
+            "nativeFingerprint": "${{ steps.native_fingerprint.outputs.fingerprint }}",
+            "otaBundleSha256": "$OTA_SHA",
+            "channel": "$CHANNEL"
+          }
+          EOF
+          cat ota-manifest-ios.json
+
       - name: Add iOS platform
         working-directory: pokerogue-src
         run: npx cap add ios
@@ -137,63 +171,14 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.pokerogue_version.outputs.version }}.${BUILD_NUM}" ios/App/App/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.pokerogue_version.outputs.version }}.${BUILD_NUM}" ios/App/App/Info.plist
 
-      - name: Configure iOS app settings
+      - name: Configure iOS Info.plist
         working-directory: pokerogue-src
-        run: |
-          /usr/libexec/PlistBuddy -c "Add :UIStatusBarHidden bool true" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :UIViewControllerBasedStatusBarAppearance bool false" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Set :LSApplicationCategoryType public.app-category.games" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.games" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :UIHomeIndicatorAutoHidden bool true" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :NSDocumentsFolderUsageDescription string 'Required to save your exported game data file.'" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" ios/App/App/Info.plist || true
-
-      - name: Register .prsv UTI so iOS preserves the file extension
-        working-directory: pokerogue-src
-        run: |
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes array" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0 dict" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:CFBundleTypeName string PokéRogue Save Data" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes array" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:0 string xyz.scooom.pkr.prsv" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:LSHandlerRank string Owner" ios/App/App/Info.plist
-
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations array" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0 dict" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeIdentifier string xyz.scooom.pkr.prsv" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeDescription string PokéRogue Save Data" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeConformsTo array" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeConformsTo:0 string public.data" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification dict" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension array" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0 string prsv" ios/App/App/Info.plist
-
-      - name: Register Google Sign-In URL scheme
-        working-directory: pokerogue-src
-        run: |
-          if [ "${{ inputs.dev }}" = "true" ]; then
-            SCHEME="${{ secrets.GOOGLE_IOS_DEV_REVERSED_CLIENT_ID }}"
-          else
-            SCHEME="${{ secrets.GOOGLE_IOS_REVERSED_CLIENT_ID }}"
-          fi
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" ios/App/App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string ${SCHEME}" ios/App/App/Info.plist
-
-      - name: Register Dropbox OAuth URL scheme
-        working-directory: pokerogue-src
-        run: |
-          if [ "${{ inputs.dev }}" = "true" ]; then
-            SCHEME="xyz.scooom.pkrdev"
-          else
-            SCHEME="xyz.scooom.pkr"
-          fi
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:1 dict" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:1:CFBundleURLSchemes array" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:1:CFBundleURLSchemes:0 string ${SCHEME}" ios/App/App/Info.plist
+        env:
+          GOOGLE_SCHEME: ${{ inputs.dev && secrets.GOOGLE_IOS_DEV_REVERSED_CLIENT_ID || secrets.GOOGLE_IOS_REVERSED_CLIENT_ID }}
+          # Same iOS OAuth client IDs used above for the IOS_CLIENT_ID_PLACEHOLDER sed.
+          GOOGLE_CLIENT_ID: ${{ inputs.dev && '856587427302-k9ns6u546mgn6vjv1mcks32mn76u1v01.apps.googleusercontent.com' || '856587427302-ejrsdp1qu750amcjupo943593vmeje1k.apps.googleusercontent.com' }}
+          DROPBOX_SCHEME: ${{ inputs.dev && 'xyz.scooom.pkrdev' || 'xyz.scooom.pkr' }}
+        run: bash ${{ github.workspace }}/scripts/configure-ios-infoplist.sh ios/App/App/Info.plist
 
       - name: Copy app icon
         run: |
@@ -256,4 +241,6 @@ jobs:
           path: |
             ${{ env.IPA_NAME }}
             version.txt
+            ota-ios.zip
+            ota-manifest-ios.json
           retention-days: 30

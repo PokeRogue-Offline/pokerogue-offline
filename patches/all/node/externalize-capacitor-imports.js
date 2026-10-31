@@ -7,8 +7,11 @@
  * native-only Capacitor plugin (`@capgo/capacitor-social-login`,
  * `@capacitor/browser`, `@capacitor/app`) behind a runtime `isCapacitor()`
  * check — never reached outside a real Capacitor (Android/iOS) build.
+ * `src/system/offline/screenshot-saver.ts` does it again with
+ * `@capacitor-community/media` (saves screenshots to a photo album), also
+ * gated on `isCapacitor()`.
  * Rolldown still tries to statically resolve every `import()` specifier at
- * build time regardless of the surrounding runtime guard, and those three
+ * build time regardless of the surrounding runtime guard, and these
  * packages are only ever installed for the two mobile workflows (each
  * workflow's "Install Capacitor" step — the Electron/desktop workflows
  * never run it). Building for desktop therefore hard-fails with "Rolldown
@@ -72,12 +75,13 @@ src = src.replace(
     IMPORT_ANCHOR +
     `\n` +
     `// Native-only Capacitor plugins, dynamically imported (never statically) from\n` +
-    `// src/system/offline/{google-drive-backup,dropbox-backup}.ts, each behind a\n` +
-    `// runtime isCapacitor() check that's only ever true inside a real Capacitor\n` +
-    `// (Android/iOS) build. Not installed for Electron/desktop builds, so Rolldown\n` +
-    `// can't resolve them there — externalize on desktop only. Mobile builds must\n` +
-    `// NOT externalize these; they're genuinely bundled and used there.\n` +
-    `const CAPACITOR_ONLY_PACKAGES = ["@capacitor/browser", "@capacitor/app", "@capgo/capacitor-social-login"];\n` +
+    `// src/system/offline/{google-drive-backup,dropbox-backup,mobile-updater,\n` +
+    `// screenshot-saver}.ts, each behind a runtime platform check that's only ever\n` +
+    `// true inside a real Capacitor (Android/iOS) build. Not installed for\n` +
+    `// Electron/desktop builds, so Rolldown can't resolve them there — externalize\n` +
+    `// on desktop only. Mobile builds must NOT externalize these; they're\n` +
+    `// genuinely bundled and used there.\n` +
+    `const CAPACITOR_ONLY_PACKAGES = ["@capacitor/browser", "@capacitor/app", "@capgo/capacitor-social-login", "@capacitor-community/media"];\n` +
     `// capacitor.config.json is written by every mobile workflow's "Configure\n` +
     `// Capacitor" step and never by desktop's — an already-existing, reliable\n` +
     `// signal for "this is a Capacitor build" with no new env var needed.\n` +

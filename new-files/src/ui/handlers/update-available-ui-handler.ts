@@ -1,7 +1,10 @@
 import { globalScene } from "#app/global-scene";
 import { Button } from "#enums/buttons";
 import { TextStyle } from "#enums/text-style";
+import { isCapacitor, isElectron } from "#system/offline/backup-provider";
+import { checkForMobileUpdate, type MobileUpdateCheckResult } from "#system/offline/mobile-updater";
 import type { ReleaseInfo } from "#system/offline/update-check-api";
+import { startMobileUpdateFlow } from "#ui/mobile-update-overlay";
 import { ScrollBar } from "#ui/containers/scroll-bar";
 import { addBBCodeTextObject, addTextObject } from "#ui/text";
 import { UiHandler } from "#ui/ui-handler";
@@ -35,6 +38,11 @@ const BODY_WIDTH_PX = SCROLLBAR_X - BODY_X - 4;
 
 const SCROLL_STEP_PX = 16;
 
+// Electron-only: "idle" shows the normal paging/scroll footer (plus a
+// "Download & Install" hint); the rest replace the footer entirely while the
+// in-Electron self-updater (configs/desktop/electron/updater.cjs) runs.
+type UpdateDownloadState = "idle" | "downloading" | "ready" | "applying" | "error";
+
 export class UpdateAvailableUiHandler extends UiHandler {
   private container: Phaser.GameObjects.Container;
   private titleText: Phaser.GameObjects.Text;
@@ -48,6 +56,19 @@ export class UpdateAvailableUiHandler extends UiHandler {
 
   private scrollY = 0;
   private contentHeight = 0;
+
+  private downloadState: UpdateDownloadState = "idle";
+  private downloadProgressText = "";
+  private downloadErrorText = "";
+
+  // Capacitor-only: populated asynchronously by show() via
+  // checkForMobileUpdate(); null until that resolves, or forever on a
+  // non-Capacitor platform, or when there's nothing actionable (iOS
+  // native-touching releases - see mobile-updater.ts's "kind" field).
+  // Once an update is actually started, the DOM overlay (#ui/mobile-update-
+  // overlay) owns the rest of the flow entirely - this class just hands off.
+  private mobileUpdateResult: MobileUpdateCheckResult | null = null;
+  private mobileUpdateStarted = false;
 
   setup(): void {
     const ui = this.getUi();
@@ -108,9 +129,30 @@ export class UpdateAvailableUiHandler extends UiHandler {
     }
 
     this.pageIndex = 0;
+    this.mobileUpdateResult = null;
+    this.mobileUpdateStarted = false;
     this.getUi().bringToTop(this.container);
     this.container.setVisible(true);
     this.renderPage();
+
+    // Capacitor-only, independent of the changelog data above:
+    // title-ui-handler.ts (patches/all/node/update-check.js) passes the
+    // installed version/build number through as args[1]/args[2] for
+    // exactly this - update-check-api.ts/checkForUpdates() itself stays
+    // platform-agnostic and untouched.
+    if (isCapacitor() && typeof args[1] === "string" && typeof args[2] === "number") {
+      console.log(`[update-available-ui] show(): kicking off checkForMobileUpdate(${args[1]}, ${args[2]})`);
+      checkForMobileUpdate(args[1], args[2]).then(result => {
+        console.log(`[update-available-ui] checkForMobileUpdate resolved:`, result);
+        this.mobileUpdateResult = result;
+        this.refreshFooter();
+        console.log(`[update-available-ui] mobileUpdateActionable() = ${this.mobileUpdateActionable()}`);
+      });
+    } else {
+      console.log(
+        `[update-available-ui] show(): skipping mobile update check (isCapacitor()=${isCapacitor()}, args[1]=${typeof args[1]}, args[2]=${typeof args[2]})`,
+      );
+    }
 
     return true;
   }
@@ -123,12 +165,7 @@ export class UpdateAvailableUiHandler extends UiHandler {
     this.pagerText.setText(this.releases.length > 1 ? `${this.pageIndex + 1} / ${this.releases.length}` : "");
     this.bodyText.setText(markdownToBBCode(release.changelog));
 
-    const hints: string[] = ["↑↓ Scroll"];
-    if (this.releases.length > 1) {
-      hints.push("◀▶ Version");
-    }
-    hints.push("Cancel: Close");
-    this.footerText.setText(hints.join("   "));
+    this.refreshFooter();
 
     this.scrollY = 0;
     this.contentHeight = this.bodyText.displayHeight;
@@ -138,14 +175,108 @@ export class UpdateAvailableUiHandler extends UiHandler {
     this.scrollBar.setScrollCursor(0);
   }
 
+  /**
+   * Builds the footer text for whatever's currently going on. Outside of
+   * Electron (the web build), or while idle, this is just the normal
+   * paging/scroll hints - everything else is the self-updater's own status,
+   * which replaces those hints entirely since paging/scrolling don't apply
+   * mid-download.
+   */
+  private refreshFooter(): void {
+    if (isElectron()) {
+      switch (this.downloadState) {
+        case "downloading":
+          this.footerText.setText(`Downloading… ${this.downloadProgressText}   Cancel: Abort`);
+          return;
+        case "ready":
+          this.footerText.setText("Enter: Restart & Install   Cancel: Later");
+          return;
+        case "applying":
+          this.footerText.setText("Applying update…");
+          return;
+        case "error":
+          this.footerText.setText(`${this.downloadErrorText}   Cancel: Close`);
+          return;
+        default:
+          break;
+      }
+    }
+
+    const hints: string[] = ["↑↓ Scroll"];
+    if (this.releases.length > 1) {
+      hints.push("◀▶ Version");
+    }
+    if (isElectron()) {
+      hints.push("Enter: Download & Install");
+    } else if (isCapacitor() && this.mobileUpdateActionable() && !this.mobileUpdateStarted) {
+      hints.push("Enter: Download Update");
+    }
+    hints.push("Cancel: Close");
+    this.footerText.setText(hints.join("   "));
+  }
+
+  /** True when there's something for Button.ACTION to do on Capacitor - false for null (not checked yet / nothing applicable) and for the iOS native-touching "notify only" kind. */
+  private mobileUpdateActionable(): boolean {
+    return this.mobileUpdateResult?.kind === "ota" || this.mobileUpdateResult?.kind === "native-android";
+  }
+
+  /** Kicks off downloadUpdate() and tracks progress/outcome via downloadState. */
+  private startDownload(): void {
+    this.downloadState = "downloading";
+    this.downloadProgressText = "0%";
+    this.refreshFooter();
+
+    window.pkrOffline?.onUpdateProgress(({ received, total }) => {
+      if (this.downloadState !== "downloading") {
+        return;
+      }
+      this.downloadProgressText = total > 0 ? `${Math.floor((received / total) * 100)}%` : `${Math.floor(received / 1024)} KB`;
+      this.refreshFooter();
+    });
+
+    window.pkrOffline
+      ?.downloadUpdate()
+      .then(() => {
+        this.downloadState = "ready";
+        this.refreshFooter();
+      })
+      .catch((err: unknown) => {
+        this.downloadState = "error";
+        this.downloadErrorText = err instanceof Error ? err.message : "Update download failed.";
+        this.refreshFooter();
+      });
+  }
+
+  /** Swaps the verified download into place and relaunches — only valid once downloadState is "ready". */
+  private applyUpdate(): void {
+    this.downloadState = "applying";
+    this.refreshFooter();
+
+    window.pkrOffline?.applyUpdateAndRelaunch().catch((err: unknown) => {
+      this.downloadState = "error";
+      this.downloadErrorText = err instanceof Error ? err.message : "Failed to apply update.";
+      this.refreshFooter();
+    });
+  }
+
   processInput(button: Button): boolean {
     const ui = this.getUi();
     let success = false;
 
     switch (button) {
       case Button.CANCEL:
+        if (this.downloadState === "downloading") {
+          window.pkrOffline?.cancelDownload();
+          this.downloadState = "idle";
+          this.refreshFooter();
+          success = true;
+          break;
+        }
         ui.revertMode();
         success = true;
+        break;
+      case Button.ACTION:
+        success = this.handleAction();
         break;
       case Button.LEFT:
         if (this.pageIndex > 0) {
@@ -176,6 +307,31 @@ export class UpdateAvailableUiHandler extends UiHandler {
     }
 
     return success;
+  }
+
+  /** Button.ACTION: starts a download when idle, or applies+relaunches once one is verified and ready. */
+  private handleAction(): boolean {
+    if (isElectron()) {
+      switch (this.downloadState) {
+        case "idle":
+          this.startDownload();
+          return true;
+        case "ready":
+          this.applyUpdate();
+          return true;
+        default:
+          return false;
+      }
+    }
+
+    if (isCapacitor() && this.mobileUpdateActionable() && !this.mobileUpdateStarted) {
+      this.mobileUpdateStarted = true;
+      startMobileUpdateFlow(this.mobileUpdateResult!);
+      this.refreshFooter();
+      return true;
+    }
+
+    return false;
   }
 
   private manualScroll(delta: number): boolean {

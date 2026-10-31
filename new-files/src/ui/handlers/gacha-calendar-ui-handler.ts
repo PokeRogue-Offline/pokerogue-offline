@@ -58,9 +58,17 @@ const GRID_Y = WEEKDAY_Y + 11;
 const FOOTER_Y = GRID_Y + ROWS * CELL_H + 2;
 const FOOTER_H = 22;
 
+// Cell chrome colors. Weekday/weekend cells are flat fills (no nineslice
+// window border - that's what made the grid read as 42 crammed buttons).
+// "Today" is called out with a thin accent outline instead of a filled bg,
+// so it doesn't compete with the icon for attention either.
+const CELL_COLOR_WEEKDAY = 0x1a4642;
+const CELL_COLOR_WEEKEND = 0x204f4a;
+const CELL_OUTLINE_TODAY = 0xe8793f;
+
 interface DayCell {
   container: Phaser.GameObjects.Container;
-  bg: Phaser.GameObjects.NineSlice;
+  bg: Phaser.GameObjects.Rectangle;
   dateText: Phaser.GameObjects.Text;
   icon: Phaser.GameObjects.Sprite;
   /** UTC-midnight timestamp for the day this cell is currently showing, or null if blank */
@@ -136,16 +144,23 @@ export class GachaCalendarUiHandler extends UiHandler {
 
         const cellContainer = globalScene.add.container(x, y);
 
-        const bg = addWindow(0, 0, CELL_W - 2, CELL_H - 2).setOrigin(0);
+        const cellW = CELL_W - 2;
+        const cellH = CELL_H - 2;
+        const bg = globalScene.add
+          .rectangle(0, 0, cellW, cellH, c === 0 || c === COLUMNS - 1 ? CELL_COLOR_WEEKEND : CELL_COLOR_WEEKDAY)
+          .setOrigin(0)
+          .setStrokeStyle(2, CELL_OUTLINE_TODAY, 0);
         cellContainer.add(bg);
 
-        const dateText = addTextObject(2, 1, "", TextStyle.WINDOW, { maxLines: 1 }).setOrigin(0);
-        cellContainer.add(dateText);
-
-        // Icon anchored toward the bottom-right, clear of the date number
-        // in the top-left corner.
-        const icon = globalScene.add.sprite(34, 10, "pokemon_icons_0").setScale(0.45).setOrigin(0.5);
+        // Icon centered in the cell - this is the thing that needs to read
+        // at a glance, so it gets the lion's share of the 44x20 cell.
+        const icon = globalScene.add.sprite(cellW / 2, cellH / 2, "pokemon_icons_0").setScale(0.62).setOrigin(0.5);
         cellContainer.add(icon);
+
+        // Day number overlaid on top-left of the icon, with a dark outline
+        // so it stays legible over any sprite, light or dark.
+        const dateText = addTextObject(1, 0, "", TextStyle.WINDOW, { maxLines: 1 }).setOrigin(0).setStroke("#000000", 4);
+        cellContainer.add(dateText);
 
         this.calendarContainer.add(cellContainer);
 
@@ -226,7 +241,9 @@ export class GachaCalendarUiHandler extends UiHandler {
       const species = speciesDataRegistry.getSpecies(getLegendaryGachaSpeciesForTimestamp(timestamp));
       cell.icon.setTexture(species.getIconAtlasKey(), species.getIconId(false));
 
-      cell.bg.setAlpha(timestamp === todayTimestamp ? 1 : 0.7);
+      // "Today" gets the accent outline; every other cell keeps its flat
+      // weekday/weekend fill with no outline.
+      cell.bg.setStrokeStyle(2, CELL_OUTLINE_TODAY, timestamp === todayTimestamp ? 1 : 0);
     }
   }
 
