@@ -145,7 +145,7 @@ jobs:
         uses: ./.github/actions/inject-dropbox-app-key
         with:
           target-file: pokerogue-src/main.cjs
-          dropbox-app-key: ${{ inputs.dev == 'true' && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
+          dropbox-app-key: ${{ inputs.dev && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
 
       - name: Set electron main in package.json
         uses: ./.github/actions/set-electron-package-metadata

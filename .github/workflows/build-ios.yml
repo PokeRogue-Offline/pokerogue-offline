@@ -69,7 +69,7 @@ jobs:
           fingerprint: ${{ steps.native_fingerprint.outputs.fingerprint }}
 
       - name: Inject Scooom-dev banner suffix
-        if: ${{ inputs.dev == 'true' }}
+        if: ${{ inputs.dev }}
         run: |
           source ${{ github.workspace }}/scripts/sed-lib.sh
           FILE=pokerogue-src/src/ui/handlers/title-ui-handler.ts
@@ -91,8 +91,8 @@ jobs:
         uses: ./.github/actions/inject-dropbox-app-key
         with:
           target-file: pokerogue-src/src/system/offline/dropbox-backup.ts
-          dropbox-app-key: ${{ inputs.dev == 'true' && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
-          redirect-uri: ${{ inputs.dev == 'true' && 'xyz.scooom.pkrdev://dropbox-auth-callback' || 'xyz.scooom.pkr://dropbox-auth-callback' }}
+          dropbox-app-key: ${{ inputs.dev && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
+          redirect-uri: ${{ inputs.dev && 'xyz.scooom.pkrdev://dropbox-auth-callback' || 'xyz.scooom.pkr://dropbox-auth-callback' }}
 
       - name: Install PokeRogue dependencies
         working-directory: pokerogue-src
@@ -174,10 +174,10 @@ jobs:
       - name: Configure iOS Info.plist
         working-directory: pokerogue-src
         env:
-          GOOGLE_SCHEME: ${{ inputs.dev == 'true' && secrets.GOOGLE_IOS_DEV_REVERSED_CLIENT_ID || secrets.GOOGLE_IOS_REVERSED_CLIENT_ID }}
+          GOOGLE_SCHEME: ${{ inputs.dev && secrets.GOOGLE_IOS_DEV_REVERSED_CLIENT_ID || secrets.GOOGLE_IOS_REVERSED_CLIENT_ID }}
           # Same iOS OAuth client IDs used above for the IOS_CLIENT_ID_PLACEHOLDER sed.
-          GOOGLE_CLIENT_ID: ${{ inputs.dev == 'true' && '856587427302-k9ns6u546mgn6vjv1mcks32mn76u1v01.apps.googleusercontent.com' || '856587427302-ejrsdp1qu750amcjupo943593vmeje1k.apps.googleusercontent.com' }}
-          DROPBOX_SCHEME: ${{ inputs.dev == 'true' && 'xyz.scooom.pkrdev' || 'xyz.scooom.pkr' }}
+          GOOGLE_CLIENT_ID: ${{ inputs.dev && '856587427302-k9ns6u546mgn6vjv1mcks32mn76u1v01.apps.googleusercontent.com' || '856587427302-ejrsdp1qu750amcjupo943593vmeje1k.apps.googleusercontent.com' }}
+          DROPBOX_SCHEME: ${{ inputs.dev && 'xyz.scooom.pkrdev' || 'xyz.scooom.pkr' }}
         run: bash ${{ github.workspace }}/scripts/configure-ios-infoplist.sh ios/App/App/Info.plist
 
       - name: Copy app icon

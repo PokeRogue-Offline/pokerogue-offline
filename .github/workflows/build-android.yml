@@ -78,8 +78,8 @@ jobs:
         uses: ./.github/actions/inject-dropbox-app-key
         with:
           target-file: pokerogue-src/src/system/offline/dropbox-backup.ts
-          dropbox-app-key: ${{ inputs.dev == 'true' && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
-          redirect-uri: ${{ inputs.dev == 'true' && 'xyz.scooom.pkrdev://dropbox-auth-callback' || 'xyz.scooom.pkr://dropbox-auth-callback' }}
+          dropbox-app-key: ${{ inputs.dev && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
+          redirect-uri: ${{ inputs.dev && 'xyz.scooom.pkrdev://dropbox-auth-callback' || 'xyz.scooom.pkr://dropbox-auth-callback' }}
 
       - name: Install PokeRogue dependencies
         working-directory: pokerogue-src
