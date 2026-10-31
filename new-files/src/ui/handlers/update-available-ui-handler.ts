@@ -141,10 +141,17 @@ export class UpdateAvailableUiHandler extends UiHandler {
     // exactly this - update-check-api.ts/checkForUpdates() itself stays
     // platform-agnostic and untouched.
     if (isCapacitor() && typeof args[1] === "string" && typeof args[2] === "number") {
+      console.log(`[update-available-ui] show(): kicking off checkForMobileUpdate(${args[1]}, ${args[2]})`);
       checkForMobileUpdate(args[1], args[2]).then(result => {
+        console.log(`[update-available-ui] checkForMobileUpdate resolved:`, result);
         this.mobileUpdateResult = result;
         this.refreshFooter();
+        console.log(`[update-available-ui] mobileUpdateActionable() = ${this.mobileUpdateActionable()}`);
       });
+    } else {
+      console.log(
+        `[update-available-ui] show(): skipping mobile update check (isCapacitor()=${isCapacitor()}, args[1]=${typeof args[1]}, args[2]=${typeof args[2]})`,
+      );
     }
 
     return true;

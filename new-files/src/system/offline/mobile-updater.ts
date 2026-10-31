@@ -221,10 +221,14 @@ interface MatchedRelease {
 
 function findApplicableRelease(releases: GhRelease[], installedVersion: string, installedBuildNumber: number): MatchedRelease | null {
   const pattern = tagPattern();
+  console.log(
+    `[mobile-updater] findApplicableRelease: ${releases.length} release(s) fetched, isScoomDev=${isScoomDev}, pattern=${pattern}, installed=${installedVersion}+${installedBuildNumber}`,
+  );
   const byVersion = new Map<string, MatchedRelease>();
   for (const release of releases) {
     const match = release.tag_name?.match(pattern);
     if (!match) {
+      console.log(`[mobile-updater]   skip "${release.tag_name}" - doesn't match pattern`);
       continue;
     }
     const [, versionStr, buildStr] = match;
@@ -234,6 +238,7 @@ function findApplicableRelease(releases: GhRelease[], installedVersion: string, 
       byVersion.set(versionStr, { version: versionStr, buildNumber, assets: release.assets || [] });
     }
   }
+  console.log(`[mobile-updater]   matched tags, highest build per version:`, Object.fromEntries(byVersion));
 
   const applicable = Array.from(byVersion.values())
     .filter(r => {
@@ -242,7 +247,9 @@ function findApplicableRelease(releases: GhRelease[], installedVersion: string, 
     })
     .sort((a, b) => compareVersions(a.version, b.version) || a.buildNumber - b.buildNumber);
 
-  return applicable.length > 0 ? applicable[applicable.length - 1] : null;
+  const result = applicable.length > 0 ? applicable[applicable.length - 1] : null;
+  console.log(`[mobile-updater]   applicable (newer than installed):`, applicable, `-> picked:`, result);
+  return result;
 }
 
 function findAsset(assets: GhAsset[], name: string): GhAsset | undefined {
@@ -290,8 +297,11 @@ async function sha256Hex(data: ArrayBuffer): Promise<string> {
  * silently, try again next launch" behavior as update-check-api.ts.
  */
 export async function checkForMobileUpdate(installedVersion: string, installedBuildNumber: number): Promise<MobileUpdateCheckResult | null> {
+  console.log(`[mobile-updater] checkForMobileUpdate(${installedVersion}, ${installedBuildNumber}) called`);
   const plat = platform();
+  console.log(`[mobile-updater] platform() = ${plat}`);
   if (!plat) {
+    console.log(`[mobile-updater] no platform (not Capacitor) - bailing out, returning null`);
     return null;
   }
 
@@ -299,31 +309,55 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
     const releases = await fetchAllReleases();
     const release = findApplicableRelease(releases, installedVersion, installedBuildNumber);
     if (!release) {
+      console.log(`[mobile-updater] no applicable release found - already up to date, or nothing matched - returning null`);
       return null;
     }
+    console.log(`[mobile-updater] applicable release: ${release.version}+${release.buildNumber}, assets:`, release.assets.map(a => a.name));
 
-    const manifestAsset = findAsset(release.assets, `PokeRogueOffline-${plat === "android" ? "Android" : "iOS"}-ota-manifest.json`);
+    const manifestAssetName = `PokeRogueOffline-${plat === "android" ? "Android" : "iOS"}-ota-manifest.json`;
+    const manifestAsset = findAsset(release.assets, manifestAssetName);
+    console.log(`[mobile-updater] looking for manifest asset "${manifestAssetName}" -> ${manifestAsset ? "found" : "NOT FOUND"}`);
+
     const installedFingerprint = getInstalledNativeFingerprint();
+    console.log(`[mobile-updater] getInstalledNativeFingerprint() = ${installedFingerprint}`);
 
     let manifest: OtaManifest | null = null;
     if (manifestAsset && installedFingerprint !== null) {
+      console.log(`[mobile-updater] fetching manifest from ${manifestAsset.browser_download_url}`);
       manifest = await fetchJson<OtaManifest>(manifestAsset.browser_download_url);
+      console.log(`[mobile-updater] manifest fetched:`, manifest);
+    } else {
+      console.log(
+        `[mobile-updater] NOT fetching manifest (manifestAsset=${!!manifestAsset}, installedFingerprint!==null=${installedFingerprint !== null}) - manifest stays null`,
+      );
     }
 
     // Dev builds only ever apply dev-channel manifests - belt-and-suspenders
     // alongside the dev-/non-dev tag pattern split above.
-    const manifestUsable = manifest !== null && manifest.channel === (isScoomDev ? "dev" : "stable");
+    const expectedChannel = isScoomDev ? "dev" : "stable";
+    const manifestUsable = manifest !== null && manifest.channel === expectedChannel;
+    console.log(
+      `[mobile-updater] manifestUsable=${manifestUsable} (manifest!==null=${manifest !== null}, manifest?.channel="${manifest?.channel}" vs expected "${expectedChannel}")`,
+    );
 
     const otaMatches = manifestUsable && installedFingerprint !== null && manifest!.nativeFingerprint === installedFingerprint;
+    console.log(
+      `[mobile-updater] otaMatches=${otaMatches} (manifest.nativeFingerprint="${manifest?.nativeFingerprint}" vs installedFingerprint="${installedFingerprint}")`,
+    );
 
     if (otaMatches) {
-      const otaAsset = findAsset(release.assets, `PokeRogueOffline-${plat === "android" ? "Android" : "iOS"}-ota.zip`);
+      const otaAssetName = `PokeRogueOffline-${plat === "android" ? "Android" : "iOS"}-ota.zip`;
+      const otaAsset = findAsset(release.assets, otaAssetName);
+      console.log(`[mobile-updater] looking for OTA asset "${otaAssetName}" -> ${otaAsset ? "found" : "NOT FOUND"}`);
       if (!otaAsset) {
+        console.log(`[mobile-updater] OTA asset missing despite otaMatches - returning null`);
         return null;
       }
       if (plat === "ios" && !IOS_OTA_CONFIRMED) {
+        console.log(`[mobile-updater] plat=ios and IOS_OTA_CONFIRMED=false - falling back to native-ios-notify-only`);
         return { version: release.version, buildNumber: release.buildNumber, kind: "native-ios-notify-only" };
       }
+      console.log(`[mobile-updater] returning kind="ota"`);
       return {
         version: release.version,
         buildNumber: release.buildNumber,
@@ -337,19 +371,24 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
       const apkAsset = findAsset(release.assets, isScoomDev ? "PokeRogueOffline-dev.apk" : "PokeRogueOffline.apk");
       const checksumsAsset = findAsset(release.assets, "SHA256SUMS.txt");
       if (!apkAsset || !checksumsAsset) {
+        console.log(`[mobile-updater] android fallback: apkAsset=${!!apkAsset}, checksumsAsset=${!!checksumsAsset} - treating as notify-only`);
         return { version: release.version, buildNumber: release.buildNumber, kind: "native-ios-notify-only" }; // nothing we can offer - treat as notify-only
       }
       const checksums = parseChecksums(await fetchText(checksumsAsset.browser_download_url));
       const apkSha256 = checksums.get(apkAsset.name);
       if (!apkSha256) {
+        console.log(`[mobile-updater] android fallback: no checksum entry for "${apkAsset.name}" in SHA256SUMS.txt - returning null`);
         return null;
       }
+      console.log(`[mobile-updater] returning kind="native-android"`);
       return { version: release.version, buildNumber: release.buildNumber, kind: "native-android", apkAsset, apkSha256 };
     }
 
+    console.log(`[mobile-updater] falling through to kind="native-ios-notify-only"`);
     return { version: release.version, buildNumber: release.buildNumber, kind: "native-ios-notify-only" };
-  } catch {
+  } catch (err) {
     // Offline or GitHub API unreachable - fail silently, try again next launch.
+    console.error(`[mobile-updater] checkForMobileUpdate threw, returning null:`, err);
     return null;
   }
 }
