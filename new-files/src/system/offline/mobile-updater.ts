@@ -9,10 +9,11 @@
  *   - "ota": fingerprints match - the release only changed web content, so
  *     the installed native shell (Capacitor plugin set, MainActivity.java/
  *     AppDelegate.swift, manifest/Info.plist permissions, URL schemes) still
- *     supports it. The web bundle is downloaded, verified, staged, and
- *     activated in place via the stock Capacitor setServerBasePath plugin
- *     method (both platforms - see IOS_OTA_CONFIRMED below) - see the
- *     activation/rollback section below.
+ *     supports it. The web bundle is downloaded, staged, and activated in
+ *     place via the stock Capacitor setServerBasePath plugin method (both
+ *     platforms - see IOS_OTA_CONFIRMED below) - see the activation/rollback
+ *     section below. No checksum verification (trusts the HTTPS transport
+ *     instead) - see downloadToFile()'s doc comment for why.
  *   - "native-android" / "native-ios-notify-only": fingerprints differ - a
  *     real reinstall is needed, which neither platform can do fully in-app.
  *     Android downloads the real APK and hands it to the system installer
@@ -157,10 +158,8 @@ export interface MobileUpdateCheckResult {
   kind: MobileUpdateKind;
   /** Only set for kind "ota" - needed by downloadMobileUpdate(). */
   otaAsset?: GhAsset;
-  otaBundleSha256?: string;
   /** Only set for kind "native-android" - needed by downloadMobileUpdate(). */
   apkAsset?: GhAsset;
-  apkSha256?: string;
 }
 
 interface GhAsset {
@@ -179,6 +178,7 @@ interface OtaManifest {
   version: string;
   buildNumber: number;
   nativeFingerprint: string;
+  /** Still published in the manifest (Write OTA manifest step), but no longer read here - checksum verification was dropped in favor of trusting HTTPS transport. */
   otaBundleSha256: string;
   channel: "stable" | "dev";
 }
@@ -289,9 +289,9 @@ function findAsset(assets: GhAsset[], name: string): GhAsset | undefined {
   return assets.find(a => a.name === name);
 }
 
-// fetchJson/fetchText are only ever called with a GitHub release asset's
-// browser_download_url (the manifest, SHA256SUMS.txt) - see capacitorHttp()'s
-// doc comment for why that needs CapacitorHttp instead of fetch(). This
+// fetchJson is only ever called with a GitHub release asset's
+// browser_download_url (the OTA manifest) - see capacitorHttp()'s doc
+// comment for why that needs CapacitorHttp instead of fetch(). This
 // module's own fetchAllReleases() talks to api.github.com directly instead
 // (no redirect involved there), which fetch() already handles fine - left
 // alone.
@@ -305,36 +305,6 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw new Error(`Failed to fetch ${url}: HTTP ${response.status}`);
   }
   return response.data as T;
-}
-
-async function fetchText(url: string): Promise<string> {
-  const http = capacitorHttp();
-  if (!http) {
-    throw new Error("CapacitorHttp plugin not available.");
-  }
-  const response = await http.request({ url, method: "GET", responseType: "text" });
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`Failed to fetch ${url}: HTTP ${response.status}`);
-  }
-  return response.data as string;
-}
-
-function parseChecksums(text: string): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const line of text.split("\n")) {
-    const match = line.match(/^([a-f0-9]{64})\s+\*?(.+)$/);
-    if (match) {
-      map.set(match[2].trim(), match[1]);
-    }
-  }
-  return map;
-}
-
-async function sha256Hex(data: ArrayBuffer): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest))
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 /**
@@ -410,25 +380,17 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
         buildNumber: release.buildNumber,
         kind: "ota",
         otaAsset,
-        otaBundleSha256: manifest!.otaBundleSha256,
       };
     }
 
     if (plat === "android") {
       const apkAsset = findAsset(release.assets, isScoomDev ? "PokeRogueOffline-dev.apk" : "PokeRogueOffline.apk");
-      const checksumsAsset = findAsset(release.assets, "SHA256SUMS.txt");
-      if (!apkAsset || !checksumsAsset) {
-        console.log(`[mobile-updater] android fallback: apkAsset=${!!apkAsset}, checksumsAsset=${!!checksumsAsset} - treating as notify-only`);
+      if (!apkAsset) {
+        console.log(`[mobile-updater] android fallback: apkAsset not found - treating as notify-only`);
         return { version: release.version, buildNumber: release.buildNumber, kind: "native-ios-notify-only" }; // nothing we can offer - treat as notify-only
       }
-      const checksums = parseChecksums(await fetchText(checksumsAsset.browser_download_url));
-      const apkSha256 = checksums.get(apkAsset.name);
-      if (!apkSha256) {
-        console.log(`[mobile-updater] android fallback: no checksum entry for "${apkAsset.name}" in SHA256SUMS.txt - returning null`);
-        return null;
-      }
       console.log(`[mobile-updater] returning kind="native-android"`);
-      return { version: release.version, buildNumber: release.buildNumber, kind: "native-android", apkAsset, apkSha256 };
+      return { version: release.version, buildNumber: release.buildNumber, kind: "native-android", apkAsset };
     }
 
     console.log(`[mobile-updater] falling through to kind="native-ios-notify-only"`);
@@ -443,28 +405,25 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
 // ── Download + verify ───────────────────────────────────────────────────
 
 let activeDownloadController: AbortController | null = null;
-let stagedOtaBytes: ArrayBuffer | null = null;
+let stagedOtaPath: string | null = null;
 let stagedOtaResult: MobileUpdateCheckResult | null = null;
 let stagedApkPath: string | null = null;
-
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
 
 /**
  * Downloads `url` straight to a file in app-private cache storage via
  * @capacitor/file-transfer (see fileTransfer()'s doc comment for why - the
- * same CORS wall CapacitorHttp sidesteps for small fetches, but these
- * downloads are too large to also base64 across the JS bridge the way
- * CapacitorHttp would require). Returns both the native path (handed to
- * installApk() as-is for the APK case) and the bytes (still needed in JS to
- * verify the checksum and, for the OTA case, unzip - unavoidable with
- * fflate's in-memory API either way, same as before this change).
+ * same CORS wall CapacitorHttp sidesteps for small fetches). Returns only
+ * the native path - earlier versions of this function also read the whole
+ * file straight back into JS (to verify a checksum, then to unzip it), which
+ * meant base64-encoding and holding the ENTIRE file - 500MB+ for the OTA
+ * bundle - in memory at once. That's almost certainly what was crashing the
+ * WKWebView process mid-update (confirmed on-device: the download completed,
+ * then the app reloaded with none of the staging ever having logged, which
+ * only fits a content-process kill-and-recover, not a real finish). Checksum
+ * verification is dropped entirely now (trusting the HTTPS transport
+ * instead - a deliberate choice, not an oversight), and stageAndActivateOta()
+ * below reads the OTA zip back in via a streaming fetch + streaming unzip
+ * instead of ever loading it whole.
  *
  * `signal`: FileTransfer.downloadFile() has no native cancellation hook, so
  * aborting here only stops this call from waiting on it - the native
@@ -476,7 +435,7 @@ async function downloadToFile(
   relPath: string,
   onProgress: (p: { received: number; total: number }) => void,
   signal: AbortSignal,
-): Promise<{ path: string; bytes: ArrayBuffer }> {
+): Promise<string> {
   const ft = fileTransfer();
   const fs = filesystem();
   if (!ft || !fs) {
@@ -504,11 +463,10 @@ async function downloadToFile(
     listenerHandle.remove();
   }
 
-  const { data } = await fs.readFile({ path: uri });
-  return { path: uri, bytes: base64ToArrayBuffer(data as string) };
+  return uri;
 }
 
-/** Downloads and verifies (never activates - see applyMobileUpdateAndRelaunch) whatever checkForMobileUpdate() last found applicable. */
+/** Downloads (never activates - see applyMobileUpdateAndRelaunch) whatever checkForMobileUpdate() last found applicable. */
 export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onProgress: (p: { received: number; total: number }) => void, signal: AbortSignal): Promise<void> {
   console.log(`[mobile-updater] downloadMobileUpdate() called with kind="${result.kind}"`);
   if (result.kind === "native-ios-notify-only") {
@@ -521,38 +479,27 @@ export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onPr
 
   try {
     if (result.kind === "ota") {
-      const { bytes } = await downloadToFile(
+      const path = await downloadToFile(
         result.otaAsset!.browser_download_url,
         `ota-download-${result.version}-${result.buildNumber}.zip`,
         onProgress,
         controller.signal,
       );
-      console.log(`[mobile-updater] downloadMobileUpdate: downloaded ${bytes.byteLength} bytes, verifying checksum`);
-      const actualSha256 = await sha256Hex(bytes);
-      if (actualSha256 !== result.otaBundleSha256) {
-        console.error(`[mobile-updater] downloadMobileUpdate: checksum mismatch - expected ${result.otaBundleSha256}, got ${actualSha256}`);
-        throw new Error("Downloaded update failed checksum verification.");
-      }
-      console.log(`[mobile-updater] downloadMobileUpdate: checksum OK, staged`);
-      stagedOtaBytes = bytes;
+      console.log(`[mobile-updater] downloadMobileUpdate: downloaded to ${path}, staged`);
+      stagedOtaPath = path;
       stagedOtaResult = result;
       return;
     }
 
     // native-android: download the real APK into app-private cache storage,
-    // verified against the release's own SHA256SUMS.txt before it's handed
-    // to installApk().
-    const { path, bytes } = await downloadToFile(
+    // then hand the path straight to installApk() - no read-back needed here
+    // at all, since there's nothing in JS that needs the APK's bytes.
+    stagedApkPath = await downloadToFile(
       result.apkAsset!.browser_download_url,
       `update-${result.version}-${result.buildNumber}.apk`,
       onProgress,
       controller.signal,
     );
-    const actualSha256 = await sha256Hex(bytes);
-    if (actualSha256 !== result.apkSha256) {
-      throw new Error("Downloaded update failed checksum verification.");
-    }
-    stagedApkPath = path;
   } finally {
     activeDownloadController = null;
   }
@@ -590,52 +537,124 @@ async function writeActivePointer(fs: any, pointer: ActivePointer): Promise<void
 }
 
 /**
- * Stages the verified OTA bundle (downloadMobileUpdate() must have already
- * run and succeeded) into its own versioned directory, then flips the
- * active pointer - the sole "point of no return" in this whole sequence.
- * Everything before that write is safely abandonable if interrupted: the
- * previously-active (and previously-confirmed) bundle is left untouched on
- * disk the entire time.
+ * Unzips the OTA bundle at `sourcePath` (a native path from
+ * downloadToFile()) into `versionDir`, without ever holding the whole
+ * archive - or the whole decompressed output - in memory at once. The
+ * previous version called fflate's unzipSync() on the full file, which
+ * first required reading that whole file back into JS as one base64 string
+ * via Filesystem.readFile() - for the ~500MB+ OTA bundle this ships, that's
+ * enough memory pressure to get the WKWebView's content process killed by
+ * iOS mid-update (confirmed on-device: the download completed, then the app
+ * reloaded with none of the staging logic ever having logged a line, which
+ * only fits a process kill-and-recover, not a real finish).
+ *
+ * Instead: read the native file through Capacitor.convertFileSrc() + a
+ * streaming fetch (a few MB at a time, not the whole thing), feed each chunk
+ * into fflate's streaming Unzip decoder, and buffer only the CURRENT entry's
+ * decompressed bytes - individual game assets top out at a few MB, nowhere
+ * near the full bundle's size - writing each one out and discarding it
+ * before the next entry starts.
+ */
+async function streamingUnzipToDir(sourcePath: string, versionDir: string, fs: any): Promise<void> {
+  const { Unzip, UnzipInflate } = await import("fflate");
+
+  const fileUrl = cap()?.convertFileSrc?.(sourcePath);
+  if (!fileUrl) {
+    throw new Error("Capacitor.convertFileSrc not available.");
+  }
+  const response = await fetch(fileUrl);
+  if (!response.ok || !response.body) {
+    throw new Error(`Failed to read downloaded OTA bundle: HTTP ${response.status}`);
+  }
+
+  const pendingWrites: Promise<unknown>[] = [];
+  let entryCount = 0;
+  let unzipError: unknown = null;
+
+  const unzip = new Unzip();
+  // Synchronous decoder, not AsyncUnzipInflate - simpler to reason about
+  // (no decoder lifecycle to manage) and plenty fast enough for per-asset
+  // chunk sizes; this isn't a hot loop.
+  unzip.register(UnzipInflate);
+  unzip.onfile = (file: any) => {
+    if (file.name.endsWith("/")) {
+      return;
+    }
+    // The OTA zip always wraps its contents in one top-level folder
+    // (build-ios.yml/build-android.yml's `zip -r ota.zip dist` zips the
+    // "dist" directory itself, not just what's inside it - confirmed
+    // against a real downloaded ota.zip, every single entry is prefixed
+    // "dist/") - strip that one leading path segment so versionDir's own
+    // root directly contains index.html, matching what setBasePath()/the
+    // native asset handler expects. Without this, every file silently
+    // lands one directory too deep (versionDir/dist/index.html instead of
+    // versionDir/index.html) and the WebView 404s looking for it at the
+    // path it was actually told to use.
+    const slashIndex = file.name.indexOf("/");
+    const relativeName = slashIndex === -1 ? file.name : file.name.slice(slashIndex + 1);
+    if (!relativeName) {
+      return;
+    }
+    entryCount++;
+    const filePath = `${versionDir}/${relativeName}`;
+    const chunks: Uint8Array[] = [];
+    file.ondata = (err: unknown, chunk: Uint8Array | null, final: boolean) => {
+      if (err) {
+        unzipError = err;
+        return;
+      }
+      if (chunk) {
+        chunks.push(chunk);
+      }
+      if (final) {
+        pendingWrites.push(fs.writeFile({ path: filePath, data: new Blob(chunks), directory: "DATA", recursive: true }));
+      }
+    };
+    file.start();
+  };
+
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (unzipError) {
+      break;
+    }
+    if (done) {
+      unzip.push(new Uint8Array(0), true);
+      break;
+    }
+    unzip.push(value, false);
+  }
+
+  if (unzipError) {
+    throw unzipError;
+  }
+  await Promise.all(pendingWrites);
+  console.log(`[mobile-updater] streamingUnzipToDir: wrote ${entryCount} entries to ${versionDir}`);
+}
+
+/**
+ * Stages the downloaded OTA bundle (downloadMobileUpdate() must have
+ * already run and succeeded) into its own versioned directory, then flips
+ * the active pointer - the sole "point of no return" in this whole
+ * sequence. Everything before that write is safely abandonable if
+ * interrupted: the previously-active (and previously-confirmed) bundle is
+ * left untouched on disk the entire time.
  */
 async function stageAndActivateOta(): Promise<void> {
-  if (!stagedOtaBytes || !stagedOtaResult) {
-    throw new Error("No verified OTA bundle staged to apply.");
+  if (!stagedOtaPath || !stagedOtaResult) {
+    throw new Error("No downloaded OTA bundle staged to apply.");
   }
   const fs = filesystem();
   if (!fs) {
     throw new Error("Capacitor Filesystem plugin not available.");
   }
 
-  const { unzipSync } = await import("fflate");
-  const entries = unzipSync(new Uint8Array(stagedOtaBytes));
-  console.log(`[mobile-updater] stageAndActivateOta: unzipped ${Object.keys(entries).length} entries, first few:`, Object.keys(entries).slice(0, 5));
-
   const versionDir = `${OTA_DIR}/${stagedOtaResult.version}-${stagedOtaResult.buildNumber}`;
   console.log(`[mobile-updater] stageAndActivateOta: versionDir="${versionDir}"`);
 
   try {
-    for (const [name, bytes] of Object.entries(entries)) {
-      if (name.endsWith("/")) {
-        continue;
-      }
-      // The OTA zip always wraps its contents in one top-level folder
-      // (build-ios.yml/build-android.yml's `zip -r ota.zip dist` zips the
-      // "dist" directory itself, not just what's inside it - confirmed
-      // against a real downloaded ota.zip, every single entry is prefixed
-      // "dist/") - strip that one leading path segment so versionDir's own
-      // root directly contains index.html, matching what setBasePath()/the
-      // native asset handler expects. Without this, every file silently
-      // lands one directory too deep (versionDir/dist/index.html instead of
-      // versionDir/index.html) and the WebView 404s looking for it at the
-      // path it was actually told to use.
-      const slashIndex = name.indexOf("/");
-      const relativeName = slashIndex === -1 ? name : name.slice(slashIndex + 1);
-      if (!relativeName) {
-        continue;
-      }
-      const filePath = `${versionDir}/${relativeName}`;
-      await fs.writeFile({ path: filePath, data: new Blob([bytes as Uint8Array]), directory: "DATA", recursive: true });
-    }
+    await streamingUnzipToDir(stagedOtaPath, versionDir, fs);
   } catch (err) {
     // Disk full / write failure mid-stage: abandon the partial directory,
     // never flip the pointer. The previously-active bundle keeps running.
