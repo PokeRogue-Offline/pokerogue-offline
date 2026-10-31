@@ -7,9 +7,6 @@
  * native-only Capacitor plugin (`@capgo/capacitor-social-login`,
  * `@capacitor/browser`, `@capacitor/app`) behind a runtime `isCapacitor()`
  * check — never reached outside a real Capacitor (Android/iOS) build.
- * `src/system/offline/mobile-updater.ts` does the same with `fflate` (client-
- * side unzip for the mobile OTA updater), gated behind a platform check
- * instead of `isCapacitor()` but the same idea, and
  * `src/system/offline/screenshot-saver.ts` does it again with
  * `@capacitor-community/media` (saves screenshots to a photo album), also
  * gated on `isCapacitor()`.
@@ -84,7 +81,7 @@ src = src.replace(
     `// Electron/desktop builds, so Rolldown can't resolve them there — externalize\n` +
     `// on desktop only. Mobile builds must NOT externalize these; they're\n` +
     `// genuinely bundled and used there.\n` +
-    `const CAPACITOR_ONLY_PACKAGES = ["@capacitor/browser", "@capacitor/app", "@capgo/capacitor-social-login", "fflate", "@capacitor-community/media"];\n` +
+    `const CAPACITOR_ONLY_PACKAGES = ["@capacitor/browser", "@capacitor/app", "@capgo/capacitor-social-login", "@capacitor-community/media"];\n` +
     `// capacitor.config.json is written by every mobile workflow's "Configure\n` +
     `// Capacitor" step and never by desktop's — an already-existing, reliable\n` +
     `// signal for "this is a Capacitor build" with no new env var needed.\n` +

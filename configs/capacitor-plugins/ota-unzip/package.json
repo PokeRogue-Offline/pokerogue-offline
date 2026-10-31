@@ -1,0 +1,15 @@
+{
+  "name": "capacitor-ota-unzip",
+  "version": "0.0.1",
+  "description": "Internal Capacitor plugin (vendored, never published) for PokeRogue-Offline: unzips a downloaded OTA bundle straight to disk in native code, so the file's bytes never cross the WebView/JS bridge. See new-files/src/system/offline/mobile-updater.ts.",
+  "license": "MIT",
+  "private": true,
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}

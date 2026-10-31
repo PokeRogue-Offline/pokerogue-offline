@@ -108,6 +108,18 @@ function otaBridge(): any {
 }
 
 /**
+ * configs/capacitor-plugins/ota-unzip - a vendored (never published)
+ * Capacitor plugin that unzips the downloaded OTA bundle straight to disk in
+ * native code (java.util.zip.ZipInputStream on Android, ZIPFoundation on
+ * iOS), so the archive's bytes never cross the WebView/JS bridge at all. See
+ * stageAndActivateOta()'s doc comment for why that bridge crossing was
+ * suspected to be crashing the WKWebView content process.
+ */
+function otaUnzip(): any {
+  return cap()?.Plugins?.OtaUnzip;
+}
+
+/**
  * Stock Capacitor plugin (bundled in @capacitor/core - no install/version
  * pin needed), auto-registered on both platforms. Used for every GitHub
  * release-asset fetch in this module instead of the WebView's own fetch():
@@ -537,109 +549,28 @@ async function writeActivePointer(fs: any, pointer: ActivePointer): Promise<void
 }
 
 /**
- * Unzips the OTA bundle at `sourcePath` (a native path from
- * downloadToFile()) into `versionDir`, without ever holding the whole
- * archive - or the whole decompressed output - in memory at once. The
- * previous version called fflate's unzipSync() on the full file, which
- * first required reading that whole file back into JS as one base64 string
- * via Filesystem.readFile() - for the ~500MB+ OTA bundle this ships, that's
- * enough memory pressure to get the WKWebView's content process killed by
- * iOS mid-update (confirmed on-device: the download completed, then the app
- * reloaded with none of the staging logic ever having logged a line, which
- * only fits a process kill-and-recover, not a real finish).
- *
- * Instead: read the native file through Capacitor.convertFileSrc() + a
- * streaming fetch (a few MB at a time, not the whole thing), feed each chunk
- * into fflate's streaming Unzip decoder, and buffer only the CURRENT entry's
- * decompressed bytes - individual game assets top out at a few MB, nowhere
- * near the full bundle's size - writing each one out and discarding it
- * before the next entry starts.
- */
-async function streamingUnzipToDir(sourcePath: string, versionDir: string, fs: any): Promise<void> {
-  const { Unzip, UnzipInflate } = await import("fflate");
-
-  const fileUrl = cap()?.convertFileSrc?.(sourcePath);
-  if (!fileUrl) {
-    throw new Error("Capacitor.convertFileSrc not available.");
-  }
-  const response = await fetch(fileUrl);
-  if (!response.ok || !response.body) {
-    throw new Error(`Failed to read downloaded OTA bundle: HTTP ${response.status}`);
-  }
-
-  const pendingWrites: Promise<unknown>[] = [];
-  let entryCount = 0;
-  let unzipError: unknown = null;
-
-  const unzip = new Unzip();
-  // Synchronous decoder, not AsyncUnzipInflate - simpler to reason about
-  // (no decoder lifecycle to manage) and plenty fast enough for per-asset
-  // chunk sizes; this isn't a hot loop.
-  unzip.register(UnzipInflate);
-  unzip.onfile = (file: any) => {
-    if (file.name.endsWith("/")) {
-      return;
-    }
-    // The OTA zip always wraps its contents in one top-level folder
-    // (build-ios.yml/build-android.yml's `zip -r ota.zip dist` zips the
-    // "dist" directory itself, not just what's inside it - confirmed
-    // against a real downloaded ota.zip, every single entry is prefixed
-    // "dist/") - strip that one leading path segment so versionDir's own
-    // root directly contains index.html, matching what setBasePath()/the
-    // native asset handler expects. Without this, every file silently
-    // lands one directory too deep (versionDir/dist/index.html instead of
-    // versionDir/index.html) and the WebView 404s looking for it at the
-    // path it was actually told to use.
-    const slashIndex = file.name.indexOf("/");
-    const relativeName = slashIndex === -1 ? file.name : file.name.slice(slashIndex + 1);
-    if (!relativeName) {
-      return;
-    }
-    entryCount++;
-    const filePath = `${versionDir}/${relativeName}`;
-    const chunks: Uint8Array[] = [];
-    file.ondata = (err: unknown, chunk: Uint8Array | null, final: boolean) => {
-      if (err) {
-        unzipError = err;
-        return;
-      }
-      if (chunk) {
-        chunks.push(chunk);
-      }
-      if (final) {
-        pendingWrites.push(fs.writeFile({ path: filePath, data: new Blob(chunks), directory: "DATA", recursive: true }));
-      }
-    };
-    file.start();
-  };
-
-  const reader = response.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (unzipError) {
-      break;
-    }
-    if (done) {
-      unzip.push(new Uint8Array(0), true);
-      break;
-    }
-    unzip.push(value, false);
-  }
-
-  if (unzipError) {
-    throw unzipError;
-  }
-  await Promise.all(pendingWrites);
-  console.log(`[mobile-updater] streamingUnzipToDir: wrote ${entryCount} entries to ${versionDir}`);
-}
-
-/**
  * Stages the downloaded OTA bundle (downloadMobileUpdate() must have
  * already run and succeeded) into its own versioned directory, then flips
  * the active pointer - the sole "point of no return" in this whole
  * sequence. Everything before that write is safely abandonable if
  * interrupted: the previously-active (and previously-confirmed) bundle is
  * left untouched on disk the entire time.
+ *
+ * The actual unzip-and-write-to-disk work happens entirely in native code
+ * (configs/capacitor-plugins/ota-unzip) - this used to be done in JS, via
+ * Capacitor.convertFileSrc() + a streaming fetch() feeding fflate's
+ * streaming Unzip decoder, buffering only the current entry's decompressed
+ * bytes in memory at once. That looked safe from the JS side, but
+ * Capacitor's iOS native URL-scheme handler behind convertFileSrc
+ * (WebViewAssetHandler.swift) reads a requested non-media file - our .zip -
+ * whole into memory before WebKit ever sees it, which is suspected to be
+ * what was actually crashing the WKWebView content process mid-update
+ * (confirmed on-device: the download completed, then the app reloaded with
+ * none of the staging logic ever having logged a line, which only fits a
+ * process kill-and-recover, not a real finish). Handing native code the
+ * source and destination paths directly means the archive's bytes never
+ * cross the WebView/JS bridge in either direction - only two short path
+ * strings in, and a small result object out.
  */
 async function stageAndActivateOta(): Promise<void> {
   if (!stagedOtaPath || !stagedOtaResult) {
@@ -649,22 +580,28 @@ async function stageAndActivateOta(): Promise<void> {
   if (!fs) {
     throw new Error("Capacitor Filesystem plugin not available.");
   }
+  const unzipPlugin = otaUnzip();
+  if (!unzipPlugin) {
+    throw new Error("OtaUnzip plugin not available.");
+  }
 
   const versionDir = `${OTA_DIR}/${stagedOtaResult.version}-${stagedOtaResult.buildNumber}`;
-  console.log(`[mobile-updater] stageAndActivateOta: versionDir="${versionDir}"`);
+  // Resolved to an absolute native path/URI up front, before calling into
+  // native code - the native plugin does plain file I/O and has no need to
+  // know Capacitor's "DATA" directory-alias semantics.
+  const { uri } = await fs.getUri({ path: versionDir, directory: "DATA" });
+  console.log(`[mobile-updater] stageAndActivateOta: versionDir="${versionDir}", uri="${uri}"`);
 
   try {
-    await streamingUnzipToDir(stagedOtaPath, versionDir, fs);
+    const { entryCount } = await unzipPlugin.unzip({ sourcePath: stagedOtaPath, destDir: uri });
+    console.log(`[mobile-updater] stageAndActivateOta: native unzip wrote ${entryCount} entries to ${uri}`);
   } catch (err) {
     // Disk full / write failure mid-stage: abandon the partial directory,
     // never flip the pointer. The previously-active bundle keeps running.
-    console.error(`[mobile-updater] stageAndActivateOta: write failed, abandoning ${versionDir}:`, err);
+    console.error(`[mobile-updater] stageAndActivateOta: native unzip failed, abandoning ${versionDir}:`, err);
     await fs.rmdir({ path: versionDir, directory: "DATA", recursive: true }).catch(() => {});
     throw err;
   }
-
-  const { uri } = await fs.getUri({ path: versionDir, directory: "DATA" });
-  console.log(`[mobile-updater] stageAndActivateOta: staged at uri="${uri}"`);
 
   // This write is the point of no return - everything above is abandonable,
   // nothing below un-does it. bootAttempts starts at 0; the next launch's

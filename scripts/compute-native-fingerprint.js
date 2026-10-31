@@ -31,6 +31,15 @@ const crypto = require("crypto");
 
 const REPO_ROOT = path.join(__dirname, "..");
 
+// Shared across both platforms - the vendored OTA-unzip plugin's JS-facing
+// metadata/contract doesn't vary per platform, but a change to it still
+// means the native side's actual behavior may have changed too.
+const OTA_UNZIP_PLUGIN_SHARED_INPUTS = [
+  "configs/capacitor-plugins/ota-unzip/package.json",
+  "configs/capacitor-plugins/ota-unzip/src/definitions.ts",
+  "configs/capacitor-plugins/ota-unzip/src/index.ts",
+];
+
 const INPUTS = {
   android: [
     "configs/android/java/MainActivity.java",
@@ -42,6 +51,10 @@ const INPUTS = {
     "configs/android/capacitor/capacitor.config.json",
     "configs/android/capacitor/capacitor.config-dev.json",
     "configs/capacitor-versions.env",
+    ...OTA_UNZIP_PLUGIN_SHARED_INPUTS,
+    "configs/capacitor-plugins/ota-unzip/android/build.gradle",
+    "configs/capacitor-plugins/ota-unzip/android/src/main/AndroidManifest.xml",
+    "configs/capacitor-plugins/ota-unzip/android/src/main/java/com/pokerogueoffline/plugins/otaunzip/OtaUnzipPlugin.java",
   ],
   ios: [
     "scripts/patch-ios-appdelegate.py",
@@ -49,6 +62,10 @@ const INPUTS = {
     "configs/ios/capacitor/capacitor.config.json",
     "configs/ios/capacitor/capacitor.config.dev.json",
     "configs/capacitor-versions.env",
+    ...OTA_UNZIP_PLUGIN_SHARED_INPUTS,
+    "configs/capacitor-plugins/ota-unzip/OtaUnzip.podspec",
+    "configs/capacitor-plugins/ota-unzip/Package.swift",
+    "configs/capacitor-plugins/ota-unzip/ios/Sources/OtaUnzipPlugin/OtaUnzipPlugin.swift",
   ],
 };
 

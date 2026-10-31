@@ -102,7 +102,7 @@ jobs:
         working-directory: pokerogue-src
         run: |
           source ${{ github.workspace }}/configs/capacitor-versions.env
-          pnpm add @capacitor/core@$CAPACITOR_CORE_VERSION @capacitor/cli@$CAPACITOR_CLI_VERSION @capacitor/ios@$CAPACITOR_IOS_VERSION @capacitor/filesystem@$CAPACITOR_FILESYSTEM_VERSION @capacitor/share@$CAPACITOR_SHARE_VERSION @capacitor/status-bar@$CAPACITOR_STATUSBAR_VERSION @capacitor/app@$CAPACITOR_APP_VERSION @capacitor/browser@$CAPACITOR_BROWSER_VERSION @capgo/capacitor-social-login@$CAPACITOR_SOCIAL_LOGIN_VERSION fflate@$CAPACITOR_FFLATE_VERSION @capacitor-community/media@$CAPACITOR_COMMUNITY_MEDIA_VERSION @capacitor/file-transfer@$CAPACITOR_FILE_TRANSFER_VERSION
+          pnpm add @capacitor/core@$CAPACITOR_CORE_VERSION @capacitor/cli@$CAPACITOR_CLI_VERSION @capacitor/ios@$CAPACITOR_IOS_VERSION @capacitor/filesystem@$CAPACITOR_FILESYSTEM_VERSION @capacitor/share@$CAPACITOR_SHARE_VERSION @capacitor/status-bar@$CAPACITOR_STATUSBAR_VERSION @capacitor/app@$CAPACITOR_APP_VERSION @capacitor/browser@$CAPACITOR_BROWSER_VERSION @capgo/capacitor-social-login@$CAPACITOR_SOCIAL_LOGIN_VERSION @capacitor-community/media@$CAPACITOR_COMMUNITY_MEDIA_VERSION @capacitor/file-transfer@$CAPACITOR_FILE_TRANSFER_VERSION file:${{ github.workspace }}/configs/capacitor-plugins/ota-unzip
 
       - name: Configure Capacitor
         working-directory: pokerogue-src
