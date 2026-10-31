@@ -36,6 +36,13 @@ fi
 /usr/libexec/PlistBuddy -c "Add :UIHomeIndicatorAutoHidden bool true" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :NSDocumentsFolderUsageDescription string 'Required to save your exported game data file.'" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string 'Required to save your screenshots to Photos.'" "$PLIST" || true
+# @capacitor-community/media's getAlbums()/createAlbum() (used to find or
+# create the "PKROffline" album before each save) read the photo library,
+# which needs this key in addition to the Add-only one above. Without it,
+# iOS hard-crashes the app the instant the screenshot button is tapped,
+# since the OS terminates on any privacy-sensitive API call that lacks its
+# matching Info.plist usage description - before any JS try/catch can run.
+/usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Required to find or create the Photos album your screenshots are saved to.'" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$PLIST" || true
 
