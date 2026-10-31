@@ -70,16 +70,23 @@ const INSTALLED_NATIVE_FINGERPRINT = "NATIVE_FINGERPRINT_PLACEHOLDER";
 // supported on iOS and Android - see webViewPlugin()/setBasePath() below.
 const IOS_OTA_CONFIRMED = true;
 
-// Written as a plain ternary, not an early-return if-block - the previous
-// form (if (X.includes("DEV") || X === "...PLACEHOLDER") return null; return
-// X;) got dead-code-folded by this project's bundler (Vite/Rolldown's oxc
-// minifier) into an unconditional `return null`, confirmed by decompiling an
-// actual shipped build: every OTA check silently treated the installed
-// fingerprint as missing, so the manifest was never even fetched. The
-// `.includes("DEV")` half was already dead weight anyway - a real SHA-256
-// hex digest can never contain "DEV" - so it's dropped entirely here.
+// Deliberately never compares against the literal text
+// "NATIVE_FINGERPRINT_PLACEHOLDER" - inject-native-fingerprint's sed command
+// (s/NATIVE_FINGERPRINT_PLACEHOLDER/<hash>/g) is a GLOBAL replace over the
+// whole file, so any occurrence of that literal string here - including one
+// written specifically to compare against it - gets rewritten too. The
+// previous two versions of this function both did exactly that
+// (`... === "NATIVE_FINGERPRINT_PLACEHOLDER"`), so after sed ran, the
+// comparison silently became "real hash === real hash" - always true,
+// always returning null. Confirmed against an actual shipped build (its
+// compiled getInstalledNativeFingerprint() was a hardcoded `return null`)
+// and reproduced locally by running this exact sed substitution. This has
+// been broken on both platforms since the OTA feature first shipped (#21).
+// A real SHA-256 digest is always exactly 64 lowercase hex characters, which
+// is a strictly more correct check anyway and contains no text sed can
+// collide with.
 function getInstalledNativeFingerprint(): string | null {
-  return INSTALLED_NATIVE_FINGERPRINT === "NATIVE_FINGERPRINT_PLACEHOLDER" ? null : INSTALLED_NATIVE_FINGERPRINT;
+  return /^[0-9a-f]{64}$/.test(INSTALLED_NATIVE_FINGERPRINT) ? INSTALLED_NATIVE_FINGERPRINT : null;
 }
 
 function cap(): any {
