@@ -35,6 +35,7 @@ fi
 /usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.games" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :UIHomeIndicatorAutoHidden bool true" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :NSDocumentsFolderUsageDescription string 'Required to save your exported game data file.'" "$PLIST" || true
+/usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string 'Required to save your screenshots to Photos.'" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$PLIST" || true
 

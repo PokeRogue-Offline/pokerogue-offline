@@ -63,6 +63,7 @@ if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
   # Targeted Patches
   apply_patch "native-save-io.js"            mobile
   apply_patch "background-audio-pause.js"    mobile
+  apply_patch "screenshot-button.js"         mobile
   if [[ "$MEMORY_PATCHES_ENABLED" == "true" ]]; then
     apply_patch "skip-legacy-ui-duplicate-textures.js" mobile
   fi
