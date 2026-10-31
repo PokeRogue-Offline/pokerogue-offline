@@ -154,11 +154,30 @@ function webViewPlugin(): any {
   return cap()?.Plugins?.WebView;
 }
 
-/** Re-points the WebView at `path` via the stock setServerBasePath plugin method - the one real mechanism both OTA paths (stage+activate and boot-time reapply) share. */
+/**
+ * Re-points the WebView at `path` via the stock setServerBasePath plugin method - the
+ * one real mechanism both OTA paths (stage+activate and boot-time reapply) share.
+ *
+ * `path` is always a file:// URI (from Capacitor's own Filesystem.getUri()), but both
+ * platforms' actual native setServerBasePath implementation expects a plain
+ * filesystem path, not a URI - confirmed directly against Capacitor's real source for
+ * both: iOS's CapacitorBridge.setServerBasePath(_:) does
+ * `URL(fileURLWithPath: path, isDirectory: true)` (which does not parse a `file:`
+ * scheme - a string starting with "file://" doesn't start with "/", so it resolves
+ * relative to the process's cwd into a nonexistent path, and the function's own
+ * `FileManager.fileExists` guard then silently no-ops); Android's
+ * AndroidProtocolHandler.openFile(String) does `new File(filePath)` directly on the
+ * raw string, same problem. Passing the untouched URI meant the asset path never
+ * actually switched on either platform, even though the plugin call itself "resolved"
+ * successfully - confirmed on-device (the app kept serving the old bundled content and
+ * re-offering the same update indefinitely). Stripping the scheme here fixes every
+ * caller at once.
+ */
 async function setBasePath(path: string): Promise<void> {
   const plugin = webViewPlugin();
+  const nativePath = path.replace(/^file:\/\//, "");
   console.log(`[mobile-updater] setBasePath(${path}) - WebView plugin ${plugin ? "found" : "NOT FOUND"}`);
-  await plugin?.setServerBasePath({ path });
+  await plugin?.setServerBasePath({ path: nativePath });
   console.log(`[mobile-updater] setBasePath(${path}) done`);
 }
 
@@ -646,6 +665,24 @@ export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResu
   throw new Error("No in-app update mechanism for this platform/release.");
 }
 
+// Guards reapplyActiveOtaBundleIfAny()'s setBasePath() call against being called more
+// than once per real app launch. Both platforms' native setServerBasePath
+// unconditionally forces an immediate WebView reload every single call - confirmed
+// directly against Capacitor's real source for both: iOS's
+// CAPBridgeViewController.setServerBasePath(path:) always does
+// `webView.load(URLRequest(url: ...))` right after calling into the bridge; Android's
+// Bridge.setServerBasePath(String) always does `webView.post(() -> webView.loadUrl(
+// appUrl))`. Since this function runs synchronously as part of main.ts's own module
+// evaluation, calling it again on every boot (including whatever boot results from
+// that very reload) created an infinite call->reload->call loop - confirmed on-device
+// (bootAttempts climbing past 100, "Importing a module script failed" from the forced
+// reload cutting off the page's own in-flight module loading). sessionStorage is the
+// right primitive here: it survives a WebView content reload within the same native
+// app process (so a reload caused by our own setBasePath call doesn't re-trigger it)
+// but is cleared on a genuine app relaunch (so a real cold launch still re-applies
+// the pointer exactly once, as intended).
+const OTA_REAPPLIED_SESSION_KEY = "mobile-updater:reapplied-path";
+
 /**
  * Boot hook - call once, early, on every cold launch (gated on
  * Capacitor.isNativePlatform()). Reads the active pointer and re-points the
@@ -656,13 +693,9 @@ export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResu
  *
  * NOTE: this only runs from JS (patches/mobile/node/mobile-ota-updater.js's
  * main.ts hook), which means it only executes AFTER the WebView has already
- * loaded its initial page from whatever base path was active at launch. On
- * a cold launch where a newer OTA bundle is active, this fires one
- * location.reload() to switch over - one extra reload, not unsafe, but not
- * as clean as a native (pre-WebView-load) reapply hook would be. That's a
- * possible future improvement, not required for correctness: setBasePath()
- * + reload() from within an already-running session (the normal apply path
- * in applyMobileUpdateAndRelaunch above) works exactly as intended either way.
+ * loaded its initial page from whatever base path was active at launch - and, per the
+ * OTA_REAPPLIED_SESSION_KEY guard above, calling setBasePath() here forces exactly one
+ * extra reload per real cold launch to switch over, never more.
  */
 export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
   const fs = filesystem();
@@ -676,6 +709,15 @@ export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
     return;
   }
 
+  try {
+    if (sessionStorage.getItem(OTA_REAPPLIED_SESSION_KEY) === pointer.path) {
+      console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: already reapplied this session - skipping`);
+      return;
+    }
+  } catch {
+    // sessionStorage unavailable - fall through and apply as normal.
+  }
+
   if (!pointer.confirmed && pointer.bootAttempts >= BOOT_ATTEMPT_THRESHOLD) {
     // This version never confirmed after repeated attempts - abandon it
     // and fall through to the bundled assets (always known-good) rather
@@ -687,6 +729,11 @@ export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
   }
 
   await writeActivePointer(fs, { ...pointer, bootAttempts: pointer.bootAttempts + 1 });
+  try {
+    sessionStorage.setItem(OTA_REAPPLIED_SESSION_KEY, pointer.path);
+  } catch {
+    // sessionStorage unavailable - nothing to do, the apply below still happens once.
+  }
   console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: reapplying setBasePath(${pointer.path}), bootAttempts now ${pointer.bootAttempts + 1}`);
   await setBasePath(pointer.path);
 }
