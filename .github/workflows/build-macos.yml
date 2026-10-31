@@ -140,6 +140,9 @@ jobs:
           dev: ${{ inputs.dev }}
           target-file: pokerogue-src/updater.cjs
 
+      - name: Inject real app version into updater.cjs
+        uses: ./.github/actions/inject-app-version
+
       - name: Inject Discord client ID into discord-rpc.cjs
         uses: ./.github/actions/inject-discord-client-id
         with:

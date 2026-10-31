@@ -94,15 +94,19 @@ function getInstalledBuildNumber() {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-// This file sits alongside package.json at the app root after the build
-// copies it in (same place main.cjs/preload.cjs land) - its "version" field
-// is the real upstream app version, exactly what update-check-api.ts compares
-// against via "#package.json" on the renderer side. electron-builder's own
-// app.getVersion() can't be used here instead: get-electron-package-version
-// mangles "X.Y.Z.W" into a plain-numeric "X.Y.ZW" for electron-builder's
-// --config.extraMetadata.version, which no longer matches the release tags.
+// get-electron-package-version/--config.extraMetadata.version mangles
+// package.json's own "X.Y.Z.W" version into a plain-numeric "X.Y.ZW" for
+// electron-builder, and that mangled string is what ends up in the
+// package.json electron-builder ships at the app root - so reading it at
+// runtime (as this used to) silently desyncs from the dotted version in the
+// release tags and makes findApplicableUpdate() miss every update. The real
+// version is instead baked in at build time (inject-app-version, run before
+// get-electron-package-version touches package.json), the same way
+// OFFLINE_BUILD_NUMBER is above.
+const OFFLINE_APP_VERSION = 'APP_VERSION_PLACEHOLDER';
+
 function getInstalledVersion() {
-  return require(path.join(__dirname, 'package.json')).version;
+  return OFFLINE_APP_VERSION;
 }
 
 function releasesUrl() {
