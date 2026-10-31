@@ -10,13 +10,16 @@
  *     the installed native shell (Capacitor plugin set, MainActivity.java/
  *     AppDelegate.swift, manifest/Info.plist permissions, URL schemes) still
  *     supports it. The web bundle is downloaded, verified, staged, and
- *     activated in place - see the activation/rollback section below.
+ *     activated in place via the stock Capacitor setServerBasePath plugin
+ *     method (both platforms - see IOS_OTA_CONFIRMED below) - see the
+ *     activation/rollback section below.
  *   - "native-android" / "native-ios-notify-only": fingerprints differ - a
- *     real reinstall is needed. Android downloads the real APK and hands it
- *     to the system installer (OtaBridgePlugin.installApk - this *hands
- *     off*, it does not install anything itself). iOS has no equivalent
- *     in-app mechanism (see IOS_OTA_CONFIRMED below) - SideStore/AltStore
- *     users get native updates through the already-existing AltStore source
+ *     real reinstall is needed, which neither platform can do fully in-app.
+ *     Android downloads the real APK and hands it to the system installer
+ *     (OtaBridgePlugin.installApk - this *hands off*, it does not install
+ *     anything itself). iOS has no equivalent - sideloaded installs can only
+ *     be replaced by another sideload, so SideStore/AltStore users get
+ *     native updates through the already-existing AltStore source
  *     (scripts/update-altstore-source.js) instead, as a separate channel.
  *
  * ── Dev release channel ─────────────────────────────────────────────────
@@ -59,14 +62,13 @@ const DEV_TAG_PATTERN = /^dev-v(\d+\.\d+\.\d+(?:\.\d+)?)-(\d+)$/;
 // update checks" convention used throughout this fork.
 const INSTALLED_NATIVE_FINGERPRINT = "NATIVE_FINGERPRINT_PLACEHOLDER";
 
-// iOS's equivalent of Android's confirmed Bridge.setServerBasePath API is
-// NOT confirmed (see the "iOS feasibility spike" section of the mobile
-// auto-update plan) - until someone actually proves a safe WKWebView
-// content-root swap against real Capacitor 8 iOS source and flips this to
-// true (filling in whatever the real API/call shape turns out to be, in
-// applyOtaIOS below), iOS never attempts the OTA path at all: every iOS
-// release, web-only or native-touching, falls through to notify-only.
-const IOS_OTA_CONFIRMED = false;
+// setServerBasePath is a STOCK Capacitor plugin method (CAPWebViewPlugin on
+// iOS, com.getcapacitor.plugin.WebView on Android - both auto-registered by
+// Capacitor core, no custom native plugin needed), confirmed directly
+// against ionic-team/capacitor's own source for both platforms. The WebView
+// base-path swap this whole OTA path depends on is therefore equally
+// supported on iOS and Android - see webViewPlugin()/setBasePath() below.
+const IOS_OTA_CONFIRMED = true;
 
 function getInstalledNativeFingerprint(): string | null {
   if (INSTALLED_NATIVE_FINGERPRINT.includes("DEV") || INSTALLED_NATIVE_FINGERPRINT === "NATIVE_FINGERPRINT_PLACEHOLDER") {
@@ -90,6 +92,16 @@ function filesystem(): any {
 
 function otaBridge(): any {
   return cap()?.Plugins?.OtaBridge;
+}
+
+/** Stock Capacitor plugin, auto-registered on both platforms - see IOS_OTA_CONFIRMED above. */
+function webViewPlugin(): any {
+  return cap()?.Plugins?.WebView;
+}
+
+/** Re-points the WebView at `path` via the stock setServerBasePath plugin method - the one real mechanism both OTA paths (stage+activate and boot-time reapply) share. */
+async function setBasePath(path: string): Promise<void> {
+  await webViewPlugin()?.setServerBasePath({ path });
 }
 
 export type MobileUpdateKind = "ota" | "native-android" | "native-ios-notify-only";
@@ -490,11 +502,10 @@ async function stageAndActivateOta(): Promise<void> {
     confirmed: false,
   });
 
-  const bridge = otaBridge();
-  await bridge?.setBasePath({ path: uri });
+  await setBasePath(uri);
 }
 
-/** OTA: stages+activates (see above) and reloads. Android native fallback: hands the downloaded APK to the system installer (does not install anything itself). iOS notify-only: always rejects. */
+/** OTA (either platform): stages+activates (see above) and reloads. Android native fallback: hands the downloaded APK to the system installer (does not install anything itself). iOS notify-only (native-touching releases only): always rejects. */
 export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResult): Promise<void> {
   if (result.kind === "ota") {
     await stageAndActivateOta();
@@ -557,8 +568,7 @@ export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
   }
 
   await writeActivePointer(fs, { ...pointer, bootAttempts: pointer.bootAttempts + 1 });
-  const bridge = otaBridge();
-  await bridge?.setBasePath({ path: pointer.path });
+  await setBasePath(pointer.path);
 }
 
 /**

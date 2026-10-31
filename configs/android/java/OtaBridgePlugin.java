@@ -12,27 +12,18 @@ import java.io.File;
 
 // Manually-registered native plugin (not an npm package - see MainActivity's
 // registerPlugin(OtaBridgePlugin.class) call) backing
-// new-files/src/system/offline/mobile-updater.ts's Android OTA/native-fallback
-// paths. Stock Capacitor plugins expose neither of these:
-//   - setBasePath: re-points the WebView at a staged OTA web bundle directory,
-//     via Bridge's own public setServerBasePath(String) API.
+// new-files/src/system/offline/mobile-updater.ts's Android native-fallback
+// (real reinstall) path. The WebView base-path swap the OTA path needs is
+// NOT custom - it's the stock Capacitor WebView plugin's setServerBasePath,
+// auto-registered on both Android and iOS, so it doesn't need to live here.
+// This plugin exists only for what stock Capacitor genuinely has no
+// equivalent for:
 //   - installApk: hands a downloaded APK to Android's system package
 //     installer. This is a *hand-off*, not an install - the OS, not this
 //     plugin, does the installing, which is why the JS/UI side describes it
 //     as "opening the installer" rather than "installing".
 @CapacitorPlugin(name = "OtaBridge")
 public class OtaBridgePlugin extends Plugin {
-
-    @PluginMethod
-    public void setBasePath(PluginCall call) {
-        String path = call.getString("path");
-        if (path == null) {
-            call.reject("Missing 'path'");
-            return;
-        }
-        getBridge().setServerBasePath(path);
-        call.resolve();
-    }
 
     @PluginMethod
     public void installApk(PluginCall call) {
