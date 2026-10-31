@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "OtaUnzip",
+    name: "CapacitorOtaUnzip",
     platforms: [.iOS(.v15)],
     products: [
         .library(
-            name: "OtaUnzip",
+            name: "CapacitorOtaUnzip",
             targets: ["OtaUnzipPlugin"])
     ],
     dependencies: [
