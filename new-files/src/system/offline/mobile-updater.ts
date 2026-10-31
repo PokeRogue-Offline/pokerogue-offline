@@ -106,6 +106,36 @@ function otaBridge(): any {
   return cap()?.Plugins?.OtaBridge;
 }
 
+/**
+ * Stock Capacitor plugin (bundled in @capacitor/core - no install/version
+ * pin needed), auto-registered on both platforms. Used for every GitHub
+ * release-asset fetch in this module instead of the WebView's own fetch():
+ * browser_download_url always 302-redirects to a signed release-assets.
+ * githubusercontent.com URL, and that redirect target sends no
+ * Access-Control-Allow-Origin header permitting the app's capacitor://
+ * origin - confirmed directly from an actual device's console
+ * ("Cross-origin redirection ... denied by Cross-Origin Resource Sharing
+ * policy"). CapacitorHttp.request() runs the request natively (NSURLSession/
+ * OkHttp), which has no concept of browser CORS, so it just follows the
+ * redirect and returns the content.
+ */
+function capacitorHttp(): any {
+  return cap()?.Plugins?.CapacitorHttp;
+}
+
+/**
+ * @capacitor/file-transfer - NOT bundled in core, pinned like the other
+ * mobile-only packages (see configs/capacitor-versions.env). Used only for
+ * the large binary downloads (OTA zip, APK), which CapacitorHttp itself
+ * can't handle well: it has to base64 the whole response across the JS
+ * bridge, and these files run into the hundreds of MB. FileTransfer streams
+ * straight to a file natively, with progress events, and sidesteps the same
+ * CORS wall CapacitorHttp sidesteps for the small fetches above.
+ */
+function fileTransfer(): any {
+  return cap()?.Plugins?.FileTransfer;
+}
+
 /** Stock Capacitor plugin, auto-registered on both platforms - see IOS_OTA_CONFIRMED above. */
 function webViewPlugin(): any {
   return cap()?.Plugins?.WebView;
@@ -256,20 +286,34 @@ function findAsset(assets: GhAsset[], name: string): GhAsset | undefined {
   return assets.find(a => a.name === name);
 }
 
+// fetchJson/fetchText are only ever called with a GitHub release asset's
+// browser_download_url (the manifest, SHA256SUMS.txt) - see capacitorHttp()'s
+// doc comment for why that needs CapacitorHttp instead of fetch(). This
+// module's own fetchAllReleases() talks to api.github.com directly instead
+// (no redirect involved there), which fetch() already handles fine - left
+// alone.
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  if (!response.ok) {
+  const http = capacitorHttp();
+  if (!http) {
+    throw new Error("CapacitorHttp plugin not available.");
+  }
+  const response = await http.request({ url, method: "GET", responseType: "json" });
+  if (response.status < 200 || response.status >= 300) {
     throw new Error(`Failed to fetch ${url}: HTTP ${response.status}`);
   }
-  return response.json() as Promise<T>;
+  return response.data as T;
 }
 
 async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url);
-  if (!response.ok) {
+  const http = capacitorHttp();
+  if (!http) {
+    throw new Error("CapacitorHttp plugin not available.");
+  }
+  const response = await http.request({ url, method: "GET", responseType: "text" });
+  if (response.status < 200 || response.status >= 300) {
     throw new Error(`Failed to fetch ${url}: HTTP ${response.status}`);
   }
-  return response.text();
+  return response.data as string;
 }
 
 function parseChecksums(text: string): Map<string, string> {
@@ -400,31 +444,65 @@ let stagedOtaBytes: ArrayBuffer | null = null;
 let stagedOtaResult: MobileUpdateCheckResult | null = null;
 let stagedApkPath: string | null = null;
 
-async function downloadToArrayBuffer(url: string, onProgress: (p: { received: number; total: number }) => void, signal: AbortSignal): Promise<ArrayBuffer> {
-  const response = await fetch(url, { signal });
-  if (!response.ok || !response.body) {
-    throw new Error(`Download failed: HTTP ${response.status}`);
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
   }
-  const total = Number(response.headers.get("content-length")) || 0;
-  let received = 0;
-  const chunks: Uint8Array[] = [];
-  const reader = response.body.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
+  return bytes.buffer;
+}
+
+/**
+ * Downloads `url` straight to a file in app-private cache storage via
+ * @capacitor/file-transfer (see fileTransfer()'s doc comment for why - the
+ * same CORS wall CapacitorHttp sidesteps for small fetches, but these
+ * downloads are too large to also base64 across the JS bridge the way
+ * CapacitorHttp would require). Returns both the native path (handed to
+ * installApk() as-is for the APK case) and the bytes (still needed in JS to
+ * verify the checksum and, for the OTA case, unzip - unavoidable with
+ * fflate's in-memory API either way, same as before this change).
+ *
+ * `signal`: FileTransfer.downloadFile() has no native cancellation hook, so
+ * aborting here only stops this call from waiting on it - the native
+ * download may keep running in the background until it finishes on its own.
+ * Best-effort, same as the rest of this module's "cancel" semantics.
+ */
+async function downloadToFile(
+  url: string,
+  relPath: string,
+  onProgress: (p: { received: number; total: number }) => void,
+  signal: AbortSignal,
+): Promise<{ path: string; bytes: ArrayBuffer }> {
+  const ft = fileTransfer();
+  const fs = filesystem();
+  if (!ft || !fs) {
+    throw new Error("Capacitor FileTransfer/Filesystem plugin not available.");
+  }
+
+  const { uri } = await fs.getUri({ path: relPath, directory: "CACHE" });
+
+  const listenerHandle = await ft.addListener("progress", (status: { url: string; bytes: number; contentLength: number }) => {
+    if (status.url === url) {
+      onProgress({ received: status.bytes, total: status.contentLength });
     }
-    chunks.push(value);
-    received += value.length;
-    onProgress({ received, total });
+  });
+
+  const abortPromise = new Promise<never>((_, reject) => {
+    signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+  });
+
+  try {
+    if (signal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    await Promise.race([ft.downloadFile({ url, path: uri, progress: true }), abortPromise]);
+  } finally {
+    listenerHandle.remove();
   }
-  const buffer = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    buffer.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return buffer.buffer;
+
+  const { data } = await fs.readFile({ path: uri });
+  return { path: uri, bytes: base64ToArrayBuffer(data as string) };
 }
 
 /** Downloads and verifies (never activates - see applyMobileUpdateAndRelaunch) whatever checkForMobileUpdate() last found applicable. */
@@ -439,7 +517,12 @@ export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onPr
 
   try {
     if (result.kind === "ota") {
-      const bytes = await downloadToArrayBuffer(result.otaAsset!.browser_download_url, onProgress, controller.signal);
+      const { bytes } = await downloadToFile(
+        result.otaAsset!.browser_download_url,
+        `ota-download-${result.version}-${result.buildNumber}.zip`,
+        onProgress,
+        controller.signal,
+      );
       const actualSha256 = await sha256Hex(bytes);
       if (actualSha256 !== result.otaBundleSha256) {
         throw new Error("Downloaded update failed checksum verification.");
@@ -452,20 +535,17 @@ export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onPr
     // native-android: download the real APK into app-private cache storage,
     // verified against the release's own SHA256SUMS.txt before it's handed
     // to installApk().
-    const bytes = await downloadToArrayBuffer(result.apkAsset!.browser_download_url, onProgress, controller.signal);
+    const { path, bytes } = await downloadToFile(
+      result.apkAsset!.browser_download_url,
+      `update-${result.version}-${result.buildNumber}.apk`,
+      onProgress,
+      controller.signal,
+    );
     const actualSha256 = await sha256Hex(bytes);
     if (actualSha256 !== result.apkSha256) {
       throw new Error("Downloaded update failed checksum verification.");
     }
-
-    const fs = filesystem();
-    if (!fs) {
-      throw new Error("Capacitor Filesystem plugin not available.");
-    }
-    const relPath = `update-${result.version}-${result.buildNumber}.apk`;
-    await fs.writeFile({ path: relPath, data: new Blob([bytes]), directory: "CACHE" });
-    const { uri } = await fs.getUri({ path: relPath, directory: "CACHE" });
-    stagedApkPath = uri;
+    stagedApkPath = path;
   } finally {
     activeDownloadController = null;
   }
