@@ -114,29 +114,21 @@ jobs:
       - name: Apply post-build patches
         run: bash ${{ github.workspace }}/scripts/apply-post-build-patches.sh android
 
-      - name: Build OTA web bundle
-        working-directory: pokerogue-src
-        run: zip -r ../ota-android.zip dist
-
-      - name: Write OTA manifest
+      - name: Split OTA bundle into code/assets/locales channels
         run: |
           BUILD_NUM=${{ inputs.build_number || github.run_number }}
           VERSION="${{ steps.pokerogue_version.outputs.version }}"
-          OTA_SHA=$(sha256sum ota-android.zip | cut -d' ' -f1)
           CHANNEL="stable"
           if [ "${{ inputs.dev }}" = "true" ]; then
             CHANNEL="dev"
           fi
-          cat > ota-manifest-android.json <<EOF
-          {
-            "version": "$VERSION",
-            "buildNumber": $BUILD_NUM,
-            "nativeFingerprint": "${{ steps.native_fingerprint.outputs.fingerprint }}",
-            "otaBundleSha256": "$OTA_SHA",
-            "channel": "$CHANNEL"
-          }
-          EOF
-          cat ota-manifest-android.json
+          node ${{ github.workspace }}/scripts/split-ota-bundle.js android \
+            pokerogue-src/dist \
+            . \
+            "$VERSION" \
+            "$BUILD_NUM" \
+            "${{ steps.native_fingerprint.outputs.fingerprint }}" \
+            "$CHANNEL"
 
       - name: Add Android platform
         working-directory: pokerogue-src
@@ -269,6 +261,8 @@ jobs:
           name: PokeRogueOffline-Android${{ inputs.dev && '-dev' || '' }}
           path: |
             ${{ env.APK_NAME }}
-            ota-android.zip
+            ota-code.zip
+            ota-assets.zip
+            ota-locales.zip
             ota-manifest-android.json
           retention-days: 30
