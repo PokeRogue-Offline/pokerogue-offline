@@ -264,5 +264,6 @@ jobs:
             ota-code.zip
             ota-assets.zip
             ota-locales.zip
+            ota-legacy.zip
             ota-manifest-android.json
           retention-days: 30
