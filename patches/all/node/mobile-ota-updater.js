@@ -2,9 +2,11 @@
 /**
  * Patch: mobile-ota-updater.js
  *
- * Copies in #system/offline/mobile-updater.ts and #ui/mobile-update-
+ * Copies in #system/offline/mobile-updater.ts, its sibling
+ * #system/offline/ota-parts.ts (the per-channel stage/activate/rollback
+ * primitives mobile-updater.ts imports from), and #ui/mobile-update-
  * overlay.ts (the Capacitor OTA/native-fallback updater and its DOM
- * overlay UI - see new-files/ for the real logic) and wires
+ * overlay UI - see new-files/ for the real logic), and wires
  * reapplyActiveOtaBundleIfAny()'s boot hook into main.ts, so a previously-
  * applied OTA bundle is re-activated on every cold launch (otherwise a
  * full relaunch would silently fall back to whatever was originally
@@ -29,6 +31,7 @@
  *
  * Targets: pokerogue-src/src/main.ts
  *          pokerogue-src/src/system/offline/mobile-updater.ts (new file)
+ *          pokerogue-src/src/system/offline/ota-parts.ts (new file)
  *          pokerogue-src/src/ui/mobile-update-overlay.ts (new file)
  */
 
@@ -73,6 +76,25 @@ if (fs.existsSync(UPDATER_PATH)) {
     "utf8",
   );
   writeFile(UPDATER_PATH, updaterSrc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-patch 1a: src/system/offline/ota-parts.ts (new file) - the per-channel
+// stage/activate/rollback primitives mobile-updater.ts (sub-patch 1 above)
+// imports from. Without this, mobile-updater.ts lands in pokerogue-src but
+// imports a sibling file that was never placed next to it, and Rolldown
+// fails to resolve "#system/offline/ota-parts" at build time.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OTA_PARTS_PATH = path.join("pokerogue-src", "src", "system", "offline", "ota-parts.ts");
+if (fs.existsSync(OTA_PARTS_PATH)) {
+  console.log("SKIP ota-parts.ts — already exists");
+} else {
+  const otaPartsSrc = fs.readFileSync(
+    path.join(NEW_FILES_DIR, "src", "system", "offline", "ota-parts.ts"),
+    "utf8",
+  );
+  writeFile(OTA_PARTS_PATH, otaPartsSrc);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
