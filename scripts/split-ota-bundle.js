@@ -56,6 +56,14 @@ const ASSET_ENTRIES = [
   "biome-bgm-loop-points.json",
   "exp-sprites.json",
   "starter-colors.json",
+  // Confirmed via an actual CI build failing this script's fail-loud guard
+  // (see classifyAndStage) - the assets submodule's own `test/` directory
+  // (vitest fixtures for the assets package itself) ends up as an EMPTY
+  // directory at dist/test/: minifyPublicJsonFiles (upstream's build
+  // plugin) recurses into it like any other subdirectory, but its only
+  // file (pokemon-sprite.test.ts) gets filtered out by that plugin's own
+  // ".test.ts" exclude pattern, leaving just the empty directory shell.
+  "test",
 ];
 
 // The locales submodule (pokerogue-locales) lands at dist/locales/ with no
@@ -66,7 +74,18 @@ const LOCALE_ENTRIES = ["locales"];
 // Everything that is Vite's own build output, or otherwise code-adjacent.
 // `assets` here is Vite's hashed JS/CSS chunk directory (NOT the game
 // `assets` submodule content - see the classification note above).
-const CODE_ENTRIES = ["index.html", "assets", "service-worker.js", "favicon.ico", "robots.txt"];
+const CODE_ENTRIES = [
+  "index.html",
+  "assets",
+  "service-worker.js",
+  "favicon.ico",
+  "robots.txt",
+  // Written by upstream's static-shell-plugin.ts, listing the current
+  // build's hashed JS/CSS chunk filenames - index.html's inline bootstrap
+  // script fetches this at runtime to find the current code bundle, so it
+  // is tightly coupled to the code chunks themselves, not a game asset.
+  "asset-manifest.json",
+];
 
 const CHANNELS = {
   code: CODE_ENTRIES,

@@ -60,7 +60,7 @@ export const CHANNELS: ChannelName[] = ["code", "assets", "locales"];
  * channel's zip already belongs to that channel by construction.
  */
 const CHANNEL_TOP_LEVEL_ENTRIES: Record<ChannelName, string[]> = {
-  code: ["index.html", "assets", "service-worker.js", "favicon.ico", "robots.txt"],
+  code: ["index.html", "assets", "service-worker.js", "favicon.ico", "robots.txt", "asset-manifest.json"],
   assets: [
     "images",
     "audio",
@@ -72,6 +72,7 @@ const CHANNEL_TOP_LEVEL_ENTRIES: Record<ChannelName, string[]> = {
     "biome-bgm-loop-points.json",
     "exp-sprites.json",
     "starter-colors.json",
+    "test",
   ],
   locales: ["locales"],
 };
