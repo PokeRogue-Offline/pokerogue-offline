@@ -161,6 +161,12 @@ async function moveEntries(fs: any, entries: string[], fromDir: string, toDir: s
   }
 }
 
+/** The one directory every channel's files live under, and the path the WebView's base path always ultimately points at once any OTA is active. */
+export async function getActiveDirUri(fs: any): Promise<string> {
+  const { uri } = await fs.getUri({ path: ACTIVE_DIR, directory: "DATA" });
+  return uri;
+}
+
 /** True once a confirmed OTA has ever been activated on this install - see the two-lifecycles note above. */
 export async function isOtaBootstrapped(fs: any): Promise<boolean> {
   for (const channel of CHANNELS) {
@@ -292,11 +298,16 @@ async function rollbackChannel(fs: any, channel: ChannelName): Promise<void> {
  * channel, since both platforms' setServerBasePath forces an immediate
  * WebView reload every call (see mobile-updater.ts's
  * OTA_REAPPLIED_SESSION_KEY comment for the loop that caused on-device).
+ *
+ * Returns whether setBasePath was actually called - the caller's own
+ * session guard must only consider a reapply "done" when this is true,
+ * never unconditionally (a truly fresh install, with no pointers at all
+ * yet, legitimately has nothing to reapply and returns false here).
  */
-export async function reapplyActivePartsIfAny(setBasePath: (path: string) => Promise<void>): Promise<void> {
+export async function reapplyActivePartsIfAny(setBasePath: (path: string) => Promise<void>): Promise<boolean> {
   const fs = filesystem();
   if (!fs) {
-    return;
+    return false;
   }
 
   let anyPointerExists = false;
@@ -324,11 +335,11 @@ export async function reapplyActivePartsIfAny(setBasePath: (path: string) => Pro
     if (anyPointerExists) {
       await rmrf(fs, ACTIVE_DIR);
     }
-    return;
+    return false;
   }
 
-  const { uri } = await fs.getUri({ path: ACTIVE_DIR, directory: "DATA" });
-  await setBasePath(uri);
+  await setBasePath(await getActiveDirUri(fs));
+  return true;
 }
 
 /** Call once gameplay/title-screen readiness is reached. Confirms every unconfirmed channel and clears its now-superseded backup. */

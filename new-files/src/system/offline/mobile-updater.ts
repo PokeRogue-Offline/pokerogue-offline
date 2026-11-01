@@ -60,6 +60,7 @@ import {
   bootstrapActive,
   CHANNELS,
   confirmPartsBootSuccess,
+  getActiveDirUri,
   isOtaBootstrapped,
   readChannelPointer,
   reapplyActivePartsIfAny,
@@ -669,6 +670,12 @@ export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResu
       }
     }
 
+    // Activate immediately - don't rely on the boot-hook reapply below to
+    // do this on the NEXT launch, since this is the first time this
+    // version's files exist at all and nothing has pointed the WebView at
+    // them yet. Mirrors the original single-bundle code's
+    // stageAndActivateOta(), which called setBasePath directly here too.
+    await setBasePath(await getActiveDirUri(fs));
     console.log(`[mobile-updater] applyMobileUpdateAndRelaunch: staged+activated, reloading now`);
     window.location.reload();
     return;
@@ -719,6 +726,16 @@ const OTA_REAPPLIED_SESSION_KEY = "mobile-updater:reapplied";
  * reapply/rollback bookkeeping to ota-parts.ts's reapplyActivePartsIfAny();
  * this wrapper's only job is the session-guard above setBasePath.
  *
+ * The session flag is only set when reapplyActivePartsIfAny() reports it
+ * actually called setBasePath - NOT unconditionally after calling it. A
+ * truly fresh install (no OTA ever applied yet) has nothing to reapply,
+ * so that call legitimately does nothing; marking the session "reapplied"
+ * anyway would wrongly skip a REAL reapply later in the same session
+ * (e.g. right after applyMobileUpdateAndRelaunch's own reload, which runs
+ * this same boot hook again on the same WebView process) - this is
+ * exactly what caused a bootstrap OTA to silently fail to activate until
+ * a manual force-close/reopen, confirmed on-device.
+ *
  * NOTE: this only runs from JS (patches/mobile/node/mobile-ota-updater.js's
  * main.ts hook), which means it only executes AFTER the WebView has already
  * loaded its initial page from whatever base path was active at launch - and, per the
@@ -735,7 +752,10 @@ export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
     // sessionStorage unavailable - fall through and apply as normal.
   }
 
-  await reapplyActivePartsIfAny(setBasePath);
+  const didActivate = await reapplyActivePartsIfAny(setBasePath);
+  if (!didActivate) {
+    return;
+  }
 
   try {
     sessionStorage.setItem(OTA_REAPPLIED_SESSION_KEY, "1");
