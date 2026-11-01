@@ -9,11 +9,16 @@
  *   - "ota": fingerprints match - the release only changed web content, so
  *     the installed native shell (Capacitor plugin set, MainActivity.java/
  *     AppDelegate.swift, manifest/Info.plist permissions, URL schemes) still
- *     supports it. The web bundle is downloaded, staged, and activated in
+ *     supports it. The web content itself is split into three
+ *     independently-updatable channels - code, assets, locales - so a
+ *     release that only changed code doesn't force re-downloading the
+ *     (much larger) assets/locales bundles; see ota-parts.ts for how each
+ *     channel is downloaded/staged/activated and resolveOtaChannels()
+ *     below for how it's decided which ones actually need it. Activated in
  *     place via the stock Capacitor setServerBasePath plugin method (both
- *     platforms - see IOS_OTA_CONFIRMED below) - see the activation/rollback
- *     section below. No checksum verification (trusts the HTTPS transport
- *     instead) - see downloadToFile()'s doc comment for why.
+ *     platforms - see IOS_OTA_CONFIRMED below). No checksum verification
+ *     (trusts the HTTPS transport instead) - see downloadToFile()'s doc
+ *     comment for why.
  *   - "native-android" / "native-ios-notify-only": fingerprints differ - a
  *     real reinstall is needed, which neither platform can do fully in-app.
  *     Android downloads the real APK and hands it to the system installer
@@ -33,20 +38,33 @@
  * second, independent safety gate on top of the tag match.
  *
  * ── Atomic activation and rollback ───────────────────────────────────────
- * An OTA bundle is staged into its own versioned directory and only made
- * "active" by flipping one small pointer file after the stage is fully
- * written and verified - never written into the currently-active bundle's
- * location in place. This makes an interrupted OTA (app killed mid-download,
- * mid-write, disk full, or a bundle that writes fine but doesn't boot)
- * structurally unable to leave the app unable to start: the active pointer
- * only ever names a version that was both fully staged AND previously
- * confirmed to boot (see reapplyActiveOtaBundleIfAny / confirmOtaBootSuccess
- * / the crash-loop counter below), mirroring the same discipline
- * updater.cjs already uses on desktop (stage first, swap atomically, keep
- * the previous version recoverable until the new one proves itself).
+ * Each channel is staged into a scratch directory and only swapped into
+ * the one served directory (`ota/active/`) after the stage is fully
+ * written - never written into the currently-active content in place -
+ * and a per-channel backup of what was there before is kept until the new
+ * version proves it boots. This makes an interrupted OTA (app killed
+ * mid-download, mid-write, disk full, or a channel that writes fine but
+ * doesn't boot) structurally unable to leave the app unable to start: a
+ * channel's pointer only ever names a version that was both fully staged
+ * AND previously confirmed to boot (see reapplyActiveOtaBundleIfAny /
+ * confirmOtaBootSuccess, which delegate to ota-parts.ts - see that file
+ * for the full per-channel stage/backup/swap/rollback mechanics),
+ * mirroring the same discipline updater.cjs already uses on desktop
+ * (stage first, swap atomically, keep the previous version recoverable
+ * until the new one proves itself).
  */
 
 import { isScoomDev } from "#system/offline/scooom-dev";
+import {
+  applyChannelUpdate,
+  bootstrapActive,
+  CHANNELS,
+  confirmPartsBootSuccess,
+  isOtaBootstrapped,
+  readChannelPointer,
+  reapplyActivePartsIfAny,
+  type ChannelName,
+} from "#system/offline/ota-parts";
 
 const OWNER = "PokeRogue-Offline";
 const REPO = "pokerogue-offline";
@@ -105,18 +123,6 @@ function filesystem(): any {
 
 function otaBridge(): any {
   return cap()?.Plugins?.OtaBridge;
-}
-
-/**
- * configs/capacitor-plugins/ota-unzip - a vendored (never published)
- * Capacitor plugin that unzips the downloaded OTA bundle straight to disk in
- * native code (java.util.zip.ZipInputStream on Android, ZIPFoundation on
- * iOS), so the archive's bytes never cross the WebView/JS bridge at all. See
- * stageAndActivateOta()'s doc comment for why that bridge crossing was
- * suspected to be crashing the WKWebView content process.
- */
-function otaUnzip(): any {
-  return cap()?.Plugins?.OtaUnzip;
 }
 
 /**
@@ -183,12 +189,19 @@ async function setBasePath(path: string): Promise<void> {
 
 export type MobileUpdateKind = "ota" | "native-android" | "native-ios-notify-only";
 
+/** One channel (code/assets/locales) that needs to be downloaded+applied - see ota-parts.ts for why these are independent. */
+export interface MobileOtaChannelUpdate {
+  asset: GhAsset;
+  /** The channel's new content-hash version, from the manifest - passed straight through to bootstrapActive()/applyChannelUpdate(). */
+  version: string;
+}
+
 export interface MobileUpdateCheckResult {
   version: string;
   buildNumber: number;
   kind: MobileUpdateKind;
-  /** Only set for kind "ota" - needed by downloadMobileUpdate(). */
-  otaAsset?: GhAsset;
+  /** Only set for kind "ota" - one entry per channel that actually needs updating (all three, on this install's first-ever OTA). */
+  otaChannels?: Partial<Record<ChannelName, MobileOtaChannelUpdate>>;
   /** Only set for kind "native-android" - needed by downloadMobileUpdate(). */
   apkAsset?: GhAsset;
 }
@@ -205,13 +218,31 @@ interface GhRelease {
   assets: GhAsset[];
 }
 
+interface OtaManifestChannel {
+  version: string;
+  sha256: string;
+  assetName: string;
+}
+
+/**
+ * v2 manifest shape - one entry per independently-updatable channel (see
+ * ota-parts.ts), replacing the old flat `{otaBundleSha256}` single-bundle
+ * shape. `schemaVersion` is checked explicitly (see checkForMobileUpdate)
+ * and anything other than 2 is treated as unusable rather than read
+ * partially - an old (pre-split) client reading THIS shape would simply
+ * not find `otaBundleSha256` (never checksum-verified client-side anyway,
+ * see downloadToFile()'s comment), which degrades safely without needing
+ * a version check on that side.
+ */
 interface OtaManifest {
+  schemaVersion: number;
   version: string;
   buildNumber: number;
   nativeFingerprint: string;
-  /** Still published in the manifest (Write OTA manifest step), but no longer read here - checksum verification was dropped in favor of trusting HTTPS transport. */
-  otaBundleSha256: string;
   channel: "stable" | "dev";
+  code: OtaManifestChannel;
+  assets: OtaManifestChannel;
+  locales: OtaManifestChannel;
 }
 
 function tagPattern(): RegExp {
@@ -320,6 +351,56 @@ function findAsset(assets: GhAsset[], name: string): GhAsset | undefined {
   return assets.find(a => a.name === name);
 }
 
+/**
+ * Decides which of the three channels actually need downloading - all
+ * three if this install has never had an OTA bootstrapped yet (nothing
+ * to compare against), otherwise only the ones whose manifest version
+ * differs from what's currently installed (see ota-parts.ts's two
+ * lifecycles). Returns null if any NEEDED channel's asset is missing from
+ * the release - same all-or-nothing strictness the single-bundle version
+ * of this check used to have.
+ *
+ * Asset names are reconstructed from the fixed release-asset naming
+ * convention (create-release.yaml's renames), not read from the
+ * manifest's own `assetName` field - that field holds the pre-rename name
+ * CI used internally (e.g. "ota-code.zip"), not the actual published
+ * release asset name.
+ */
+async function resolveOtaChannels(
+  plat: "android" | "ios",
+  releaseAssets: GhAsset[],
+  manifest: OtaManifest,
+): Promise<Partial<Record<ChannelName, MobileOtaChannelUpdate>> | null> {
+  const fs = filesystem();
+  const bootstrapped = fs ? await isOtaBootstrapped(fs) : false;
+  console.log(`[mobile-updater] resolveOtaChannels: bootstrapped=${bootstrapped}`);
+
+  const platformName = plat === "android" ? "Android" : "iOS";
+  const result: Partial<Record<ChannelName, MobileOtaChannelUpdate>> = {};
+
+  for (const channel of CHANNELS) {
+    const manifestChannel = manifest[channel];
+    let needed = !bootstrapped; // first-ever OTA needs all three, regardless of version comparison
+    if (!needed) {
+      const installedPointer = fs ? await readChannelPointer(fs, channel) : null;
+      needed = installedPointer?.version !== manifestChannel.version;
+    }
+    if (!needed) {
+      continue;
+    }
+
+    const assetName = `PokeRogueOffline-${platformName}-ota-${channel}.zip`;
+    const asset = findAsset(releaseAssets, assetName);
+    console.log(`[mobile-updater] resolveOtaChannels: ${channel} needed, looking for "${assetName}" -> ${asset ? "found" : "NOT FOUND"}`);
+    if (!asset) {
+      return null; // caller treats a null return as "unusable" - see checkForMobileUpdate
+    }
+    result[channel] = { asset, version: manifestChannel.version };
+  }
+
+  return result;
+}
+
 // fetchJson is only ever called with a GitHub release asset's
 // browser_download_url (the OTA manifest) - see capacitorHttp()'s doc
 // comment for why that needs CapacitorHttp instead of fetch(). This
@@ -381,11 +462,13 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
     }
 
     // Dev builds only ever apply dev-channel manifests - belt-and-suspenders
-    // alongside the dev-/non-dev tag pattern split above.
+    // alongside the dev-/non-dev tag pattern split above. schemaVersion is
+    // checked here too (fail closed on anything but the v2 shape this
+    // module knows how to read) rather than guessing at an unknown shape.
     const expectedChannel = isScoomDev ? "dev" : "stable";
-    const manifestUsable = manifest !== null && manifest.channel === expectedChannel;
+    const manifestUsable = manifest !== null && manifest.schemaVersion === 2 && manifest.channel === expectedChannel;
     console.log(
-      `[mobile-updater] manifestUsable=${manifestUsable} (manifest!==null=${manifest !== null}, manifest?.channel="${manifest?.channel}" vs expected "${expectedChannel}")`,
+      `[mobile-updater] manifestUsable=${manifestUsable} (manifest!==null=${manifest !== null}, schemaVersion=${manifest?.schemaVersion}, manifest?.channel="${manifest?.channel}" vs expected "${expectedChannel}")`,
     );
 
     const otaMatches = manifestUsable && installedFingerprint !== null && manifest!.nativeFingerprint === installedFingerprint;
@@ -394,23 +477,22 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
     );
 
     if (otaMatches) {
-      const otaAssetName = `PokeRogueOffline-${plat === "android" ? "Android" : "iOS"}-ota.zip`;
-      const otaAsset = findAsset(release.assets, otaAssetName);
-      console.log(`[mobile-updater] looking for OTA asset "${otaAssetName}" -> ${otaAsset ? "found" : "NOT FOUND"}`);
-      if (!otaAsset) {
-        console.log(`[mobile-updater] OTA asset missing despite otaMatches - returning null`);
-        return null;
-      }
       if (plat === "ios" && !IOS_OTA_CONFIRMED) {
         console.log(`[mobile-updater] plat=ios and IOS_OTA_CONFIRMED=false - falling back to native-ios-notify-only`);
         return { version: release.version, buildNumber: release.buildNumber, kind: "native-ios-notify-only" };
       }
-      console.log(`[mobile-updater] returning kind="ota"`);
+
+      const otaChannels = await resolveOtaChannels(plat, release.assets, manifest!);
+      if (!otaChannels) {
+        console.log(`[mobile-updater] resolveOtaChannels failed (missing asset for a needed channel) - returning null`);
+        return null;
+      }
+      console.log(`[mobile-updater] returning kind="ota", channels:`, Object.keys(otaChannels));
       return {
         version: release.version,
         buildNumber: release.buildNumber,
         kind: "ota",
-        otaAsset,
+        otaChannels,
       };
     }
 
@@ -436,8 +518,7 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
 // ── Download + verify ───────────────────────────────────────────────────
 
 let activeDownloadController: AbortController | null = null;
-let stagedOtaPath: string | null = null;
-let stagedOtaResult: MobileUpdateCheckResult | null = null;
+let stagedOtaChannelPaths: Partial<Record<ChannelName, string>> = {};
 let stagedApkPath: string | null = null;
 
 /**
@@ -452,9 +533,10 @@ let stagedApkPath: string | null = null;
  * then the app reloaded with none of the staging ever having logged, which
  * only fits a content-process kill-and-recover, not a real finish). Checksum
  * verification is dropped entirely now (trusting the HTTPS transport
- * instead - a deliberate choice, not an oversight), and stageAndActivateOta()
- * below reads the OTA zip back in via a streaming fetch + streaming unzip
- * instead of ever loading it whole.
+ * instead - a deliberate choice, not an oversight), and ota-parts.ts's
+ * bootstrapActive()/applyChannelUpdate() unzip the downloaded zip via
+ * native code (configs/capacitor-plugins/ota-unzip) instead of ever
+ * loading it whole into JS.
  *
  * `signal`: FileTransfer.downloadFile() has no native cancellation hook, so
  * aborting here only stops this call from waiting on it - the native
@@ -510,15 +592,18 @@ export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onPr
 
   try {
     if (result.kind === "ota") {
-      const path = await downloadToFile(
-        result.otaAsset!.browser_download_url,
-        `ota-download-${result.version}-${result.buildNumber}.zip`,
-        onProgress,
-        controller.signal,
-      );
-      console.log(`[mobile-updater] downloadMobileUpdate: downloaded to ${path}, staged`);
-      stagedOtaPath = path;
-      stagedOtaResult = result;
+      stagedOtaChannelPaths = {};
+      // Sequential, one channel at a time - simpler than merging progress
+      // across parallel downloads, and channel zips are each far smaller
+      // than the old single combined bundle, so there's no strong reason
+      // to parallelize. onProgress resets to 0 at the start of each
+      // channel's download rather than reporting one running total across
+      // all of them - a deliberate simplification, not an oversight.
+      for (const [channel, update] of Object.entries(result.otaChannels ?? {}) as [ChannelName, MobileOtaChannelUpdate][]) {
+        const path = await downloadToFile(update.asset.browser_download_url, `ota-download-${channel}-${result.version}-${result.buildNumber}.zip`, onProgress, controller.signal);
+        console.log(`[mobile-updater] downloadMobileUpdate: downloaded ${channel} to ${path}, staged`);
+        stagedOtaChannelPaths[channel] = path;
+      }
       return;
     }
 
@@ -541,108 +626,49 @@ export function cancelMobileDownload(): void {
 }
 
 // ── Atomic activation and rollback (OTA path only) ──────────────────────
+//
+// The actual per-channel stage/swap/rollback logic (and why it needs no
+// composed-directory native plugin) lives in ota-parts.ts - this module
+// only orchestrates which channels got downloaded and when to call into
+// it, plus the setBasePath/session-reapply plumbing already in place
+// below.
 
-const OTA_DIR = "ota";
-const ACTIVE_POINTER_PATH = `${OTA_DIR}/active.json`;
-const BOOT_ATTEMPT_THRESHOLD = 2;
-
-interface ActivePointer {
-  version: string;
-  buildNumber: number;
-  path: string;
-  bootAttempts: number;
-  confirmed: boolean;
-}
-
-async function readActivePointer(fs: any): Promise<ActivePointer | null> {
-  try {
-    const { data } = await fs.readFile({ path: ACTIVE_POINTER_PATH, directory: "DATA", encoding: "utf8" });
-    return JSON.parse(data as string);
-  } catch {
-    return null;
-  }
-}
-
-async function writeActivePointer(fs: any, pointer: ActivePointer): Promise<void> {
-  await fs.writeFile({ path: ACTIVE_POINTER_PATH, data: JSON.stringify(pointer), directory: "DATA", encoding: "utf8", recursive: true });
-}
-
-/**
- * Stages the downloaded OTA bundle (downloadMobileUpdate() must have
- * already run and succeeded) into its own versioned directory, then flips
- * the active pointer - the sole "point of no return" in this whole
- * sequence. Everything before that write is safely abandonable if
- * interrupted: the previously-active (and previously-confirmed) bundle is
- * left untouched on disk the entire time.
- *
- * The actual unzip-and-write-to-disk work happens entirely in native code
- * (configs/capacitor-plugins/ota-unzip) - this used to be done in JS, via
- * Capacitor.convertFileSrc() + a streaming fetch() feeding fflate's
- * streaming Unzip decoder, buffering only the current entry's decompressed
- * bytes in memory at once. That looked safe from the JS side, but
- * Capacitor's iOS native URL-scheme handler behind convertFileSrc
- * (WebViewAssetHandler.swift) reads a requested non-media file - our .zip -
- * whole into memory before WebKit ever sees it, which is suspected to be
- * what was actually crashing the WKWebView content process mid-update
- * (confirmed on-device: the download completed, then the app reloaded with
- * none of the staging logic ever having logged a line, which only fits a
- * process kill-and-recover, not a real finish). Handing native code the
- * source and destination paths directly means the archive's bytes never
- * cross the WebView/JS bridge in either direction - only two short path
- * strings in, and a small result object out.
- */
-async function stageAndActivateOta(): Promise<void> {
-  if (!stagedOtaPath || !stagedOtaResult) {
-    throw new Error("No downloaded OTA bundle staged to apply.");
-  }
-  const fs = filesystem();
-  if (!fs) {
-    throw new Error("Capacitor Filesystem plugin not available.");
-  }
-  const unzipPlugin = otaUnzip();
-  if (!unzipPlugin) {
-    throw new Error("OtaUnzip plugin not available.");
-  }
-
-  const versionDir = `${OTA_DIR}/${stagedOtaResult.version}-${stagedOtaResult.buildNumber}`;
-  // Resolved to an absolute native path/URI up front, before calling into
-  // native code - the native plugin does plain file I/O and has no need to
-  // know Capacitor's "DATA" directory-alias semantics.
-  const { uri } = await fs.getUri({ path: versionDir, directory: "DATA" });
-  console.log(`[mobile-updater] stageAndActivateOta: versionDir="${versionDir}", uri="${uri}"`);
-
-  try {
-    const { entryCount } = await unzipPlugin.unzip({ sourcePath: stagedOtaPath, destDir: uri });
-    console.log(`[mobile-updater] stageAndActivateOta: native unzip wrote ${entryCount} entries to ${uri}`);
-  } catch (err) {
-    // Disk full / write failure mid-stage: abandon the partial directory,
-    // never flip the pointer. The previously-active bundle keeps running.
-    console.error(`[mobile-updater] stageAndActivateOta: native unzip failed, abandoning ${versionDir}:`, err);
-    await fs.rmdir({ path: versionDir, directory: "DATA", recursive: true }).catch(() => {});
-    throw err;
-  }
-
-  // This write is the point of no return - everything above is abandonable,
-  // nothing below un-does it. bootAttempts starts at 0; the next launch's
-  // reapplyActiveOtaBundleIfAny() increments it before this version proves
-  // itself via confirmOtaBootSuccess().
-  await writeActivePointer(fs, {
-    version: stagedOtaResult.version,
-    buildNumber: stagedOtaResult.buildNumber,
-    path: uri,
-    bootAttempts: 0,
-    confirmed: false,
-  });
-  console.log(`[mobile-updater] stageAndActivateOta: active pointer written`);
-
-  await setBasePath(uri);
-}
-
-/** OTA (either platform): stages+activates (see above) and reloads. Android native fallback: hands the downloaded APK to the system installer (does not install anything itself). iOS notify-only (native-touching releases only): always rejects. */
+/** OTA (either platform): bootstraps or incrementally applies whichever channels were downloaded, then reloads. Android native fallback: hands the downloaded APK to the system installer (does not install anything itself). iOS notify-only (native-touching releases only): always rejects. */
 export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResult): Promise<void> {
   console.log(`[mobile-updater] applyMobileUpdateAndRelaunch() called with kind="${result.kind}"`);
   if (result.kind === "ota") {
-    await stageAndActivateOta();
+    const fs = filesystem();
+    if (!fs) {
+      throw new Error("Capacitor Filesystem plugin not available.");
+    }
+    const otaChannels = result.otaChannels ?? {};
+
+    if (!(await isOtaBootstrapped(fs))) {
+      // First-ever OTA on this install - checkForMobileUpdate() guarantees
+      // all three channels were downloaded for this case (see
+      // resolveOtaChannels), so this is never a partial bootstrap.
+      const zipPaths: Partial<Record<ChannelName, string>> = {};
+      const versions: Partial<Record<ChannelName, string>> = {};
+      for (const channel of CHANNELS) {
+        const update = otaChannels[channel];
+        const path = stagedOtaChannelPaths[channel];
+        if (!update || !path) {
+          throw new Error(`Missing downloaded bootstrap channel "${channel}" - was downloadMobileUpdate() called first?`);
+        }
+        zipPaths[channel] = path;
+        versions[channel] = update.version;
+      }
+      await bootstrapActive(zipPaths as Record<ChannelName, string>, versions as Record<ChannelName, string>);
+    } else {
+      for (const [channel, update] of Object.entries(otaChannels) as [ChannelName, MobileOtaChannelUpdate][]) {
+        const path = stagedOtaChannelPaths[channel];
+        if (!path) {
+          throw new Error(`Missing downloaded channel "${channel}" - was downloadMobileUpdate() called first?`);
+        }
+        await applyChannelUpdate(channel, path, update.version);
+      }
+    }
+
     console.log(`[mobile-updater] applyMobileUpdateAndRelaunch: staged+activated, reloading now`);
     window.location.reload();
     return;
@@ -681,15 +707,17 @@ export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResu
 // app process (so a reload caused by our own setBasePath call doesn't re-trigger it)
 // but is cleared on a genuine app relaunch (so a real cold launch still re-applies
 // the pointer exactly once, as intended).
-const OTA_REAPPLIED_SESSION_KEY = "mobile-updater:reapplied-path";
+//
+// Unlike the old single-bundle version, there's now only ONE possible
+// served path (ota/active/, shared by all three channels), so the guard
+// is a plain boolean instead of a path comparison.
+const OTA_REAPPLIED_SESSION_KEY = "mobile-updater:reapplied";
 
 /**
  * Boot hook - call once, early, on every cold launch (gated on
- * Capacitor.isNativePlatform()). Reads the active pointer and re-points the
- * WebView at whatever it names (a full relaunch would otherwise silently
- * fall back to the bundled assets); tracks the crash-loop counter, rolling
- * back to nothing (falls through to the originally-bundled assets, which
- * are always known-good) if a version repeatedly fails to confirm.
+ * Capacitor.isNativePlatform()). Delegates the actual per-channel
+ * reapply/rollback bookkeeping to ota-parts.ts's reapplyActivePartsIfAny();
+ * this wrapper's only job is the session-guard above setBasePath.
  *
  * NOTE: this only runs from JS (patches/mobile/node/mobile-ota-updater.js's
  * main.ts hook), which means it only executes AFTER the WebView has already
@@ -698,19 +726,8 @@ const OTA_REAPPLIED_SESSION_KEY = "mobile-updater:reapplied-path";
  * extra reload per real cold launch to switch over, never more.
  */
 export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
-  const fs = filesystem();
-  if (!fs) {
-    console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: no Filesystem plugin - bailing`);
-    return;
-  }
-  const pointer = await readActivePointer(fs);
-  console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: active pointer =`, pointer);
-  if (!pointer) {
-    return;
-  }
-
   try {
-    if (sessionStorage.getItem(OTA_REAPPLIED_SESSION_KEY) === pointer.path) {
+    if (sessionStorage.getItem(OTA_REAPPLIED_SESSION_KEY) === "1") {
       console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: already reapplied this session - skipping`);
       return;
     }
@@ -718,51 +735,16 @@ export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
     // sessionStorage unavailable - fall through and apply as normal.
   }
 
-  if (!pointer.confirmed && pointer.bootAttempts >= BOOT_ATTEMPT_THRESHOLD) {
-    // This version never confirmed after repeated attempts - abandon it
-    // and fall through to the bundled assets (always known-good) rather
-    // than retrying something that doesn't start.
-    console.warn(`[mobile-updater] reapplyActiveOtaBundleIfAny: never confirmed after ${pointer.bootAttempts} attempts - abandoning, falling back to bundled assets`);
-    await fs.rmdir({ path: `${OTA_DIR}/${pointer.version}-${pointer.buildNumber}`, directory: "DATA", recursive: true }).catch(() => {});
-    await fs.deleteFile({ path: ACTIVE_POINTER_PATH, directory: "DATA" }).catch(() => {});
-    return;
-  }
+  await reapplyActivePartsIfAny(setBasePath);
 
-  await writeActivePointer(fs, { ...pointer, bootAttempts: pointer.bootAttempts + 1 });
   try {
-    sessionStorage.setItem(OTA_REAPPLIED_SESSION_KEY, pointer.path);
+    sessionStorage.setItem(OTA_REAPPLIED_SESSION_KEY, "1");
   } catch {
-    // sessionStorage unavailable - nothing to do, the apply below still happens once.
+    // sessionStorage unavailable - nothing to do, the apply above still happened once.
   }
-  console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: reapplying setBasePath(${pointer.path}), bootAttempts now ${pointer.bootAttempts + 1}`);
-  await setBasePath(pointer.path);
 }
 
-/**
- * Call once gameplay/title-screen readiness is reached. Resets the
- * crash-loop counter and clears out any previous (now-superseded) staged
- * version's directory - never deletes the current one it's confirming.
- */
+/** Call once gameplay/title-screen readiness is reached. Delegates to ota-parts.ts's confirmPartsBootSuccess() (confirms every unconfirmed channel, clears their backups). */
 export async function confirmOtaBootSuccess(): Promise<void> {
-  const fs = filesystem();
-  if (!fs) {
-    return;
-  }
-  const pointer = await readActivePointer(fs);
-  if (!pointer || pointer.confirmed) {
-    return;
-  }
-  await writeActivePointer(fs, { ...pointer, confirmed: true, bootAttempts: 0 });
-
-  try {
-    const { files } = await fs.readdir({ path: OTA_DIR, directory: "DATA" });
-    const currentDirName = `${pointer.version}-${pointer.buildNumber}`;
-    for (const entry of files as { name: string }[]) {
-      if (entry.name !== currentDirName && entry.name !== "active.json") {
-        await fs.rmdir({ path: `${OTA_DIR}/${entry.name}`, directory: "DATA", recursive: true }).catch(() => {});
-      }
-    }
-  } catch {
-    // Nothing to clean up yet (first OTA ever applied) - fine.
-  }
+  await confirmPartsBootSuccess();
 }

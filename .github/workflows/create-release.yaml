@@ -359,7 +359,9 @@ jobs:
           gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > ipa.zip
           unzip ipa.zip -d ipa-out
           mv "ipa-out/PokeRogueOffline${TAG}.ipa" "./PokeRogueOffline${TAG}.ipa"
-          mv "ipa-out/ota-ios.zip" "./PokeRogueOffline-iOS-ota.zip"
+          mv "ipa-out/ota-code.zip" "./PokeRogueOffline-iOS-ota-code.zip"
+          mv "ipa-out/ota-assets.zip" "./PokeRogueOffline-iOS-ota-assets.zip"
+          mv "ipa-out/ota-locales.zip" "./PokeRogueOffline-iOS-ota-locales.zip"
           mv "ipa-out/ota-manifest-ios.json" "./PokeRogueOffline-iOS-ota-manifest.json"
 
       - name: Download APK artifact
@@ -374,7 +376,9 @@ jobs:
           gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > apk.zip
           unzip apk.zip -d apk-out
           mv "apk-out/PokeRogueOffline${TAG}.apk" "./PokeRogueOffline${TAG}.apk"
-          mv "apk-out/ota-android.zip" "./PokeRogueOffline-Android-ota.zip"
+          mv "apk-out/ota-code.zip" "./PokeRogueOffline-Android-ota-code.zip"
+          mv "apk-out/ota-assets.zip" "./PokeRogueOffline-Android-ota-assets.zip"
+          mv "apk-out/ota-locales.zip" "./PokeRogueOffline-Android-ota-locales.zip"
           mv "apk-out/ota-manifest-android.json" "./PokeRogueOffline-Android-ota-manifest.json"
           
       - name: Download AppImage artifact
@@ -576,8 +580,12 @@ jobs:
             "PokeRogueOffline${TAG}-arm64.dmg" \
             "PokeRogueOffline${TAG}-x64.app.tar.gz" \
             "PokeRogueOffline${TAG}-arm64.app.tar.gz" \
-            PokeRogueOffline-Android-ota.zip \
-            PokeRogueOffline-iOS-ota.zip \
+            PokeRogueOffline-Android-ota-code.zip \
+            PokeRogueOffline-Android-ota-assets.zip \
+            PokeRogueOffline-Android-ota-locales.zip \
+            PokeRogueOffline-iOS-ota-code.zip \
+            PokeRogueOffline-iOS-ota-assets.zip \
+            PokeRogueOffline-iOS-ota-locales.zip \
             > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -609,8 +617,8 @@ jobs:
             - **PokeRogueOffline-x64.dmg** — macOS (Intel)
             - **PokeRogueOffline-arm64.dmg** — macOS (Apple Silicon)
             - **PokeRogueOffline-x64.app.tar.gz** / **PokeRogueOffline-arm64.app.tar.gz** — macOS app bundle, used only by the in-app self-updater (not for manual install — use the DMG for that)
-            - **PokeRogueOffline-Android-ota.zip** / **PokeRogueOffline-iOS-ota.zip** + their `-ota-manifest.json` — web-only OTA bundles used by the in-app mobile updater (not for manual install)
-            - **SHA256SUMS.txt** — checksums for the ten files above (excluding the two `-ota-manifest.json` files, which carry their own bundle checksum)
+            - **PokeRogueOffline-{Android,iOS}-ota-{code,assets,locales}.zip** + their `-ota-manifest.json` — the mobile in-app updater's three independently-updatable channels (code/assets/locales), so a code-only update doesn't force re-downloading the (much larger) assets or locales bundles (not for manual install)
+            - **SHA256SUMS.txt** — checksums for the fourteen files above (excluding the two `-ota-manifest.json` files, which carry their own per-channel checksums)
             - Build provenance for each binary is attested via GitHub Actions — verify with `gh attestation verify <file> --repo ${{ github.repository }}`
 
           files: |
@@ -622,9 +630,13 @@ jobs:
             PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.dmg
             PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.app.tar.gz
             PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.app.tar.gz
-            PokeRogueOffline-Android-ota.zip
+            PokeRogueOffline-Android-ota-code.zip
+            PokeRogueOffline-Android-ota-assets.zip
+            PokeRogueOffline-Android-ota-locales.zip
             PokeRogueOffline-Android-ota-manifest.json
-            PokeRogueOffline-iOS-ota.zip
+            PokeRogueOffline-iOS-ota-code.zip
+            PokeRogueOffline-iOS-ota-assets.zip
+            PokeRogueOffline-iOS-ota-locales.zip
             PokeRogueOffline-iOS-ota-manifest.json
             SHA256SUMS.txt
 

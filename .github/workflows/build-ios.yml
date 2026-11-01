@@ -128,29 +128,21 @@ jobs:
       - name: Apply post-build patches
         run: bash ${{ github.workspace }}/scripts/apply-post-build-patches.sh mobile
 
-      - name: Build OTA web bundle
-        working-directory: pokerogue-src
-        run: zip -r ../ota-ios.zip dist
-
-      - name: Write OTA manifest
+      - name: Split OTA bundle into code/assets/locales channels
         run: |
           BUILD_NUM=${{ inputs.build_number || github.run_number }}
           VERSION="${{ steps.pokerogue_version.outputs.version }}"
-          OTA_SHA=$(shasum -a 256 ota-ios.zip | cut -d' ' -f1)
           CHANNEL="stable"
           if [ "${{ inputs.dev }}" = "true" ]; then
             CHANNEL="dev"
           fi
-          cat > ota-manifest-ios.json <<EOF
-          {
-            "version": "$VERSION",
-            "buildNumber": $BUILD_NUM,
-            "nativeFingerprint": "${{ steps.native_fingerprint.outputs.fingerprint }}",
-            "otaBundleSha256": "$OTA_SHA",
-            "channel": "$CHANNEL"
-          }
-          EOF
-          cat ota-manifest-ios.json
+          node ${{ github.workspace }}/scripts/split-ota-bundle.js ios \
+            pokerogue-src/dist \
+            . \
+            "$VERSION" \
+            "$BUILD_NUM" \
+            "${{ steps.native_fingerprint.outputs.fingerprint }}" \
+            "$CHANNEL"
 
       - name: Add iOS platform
         working-directory: pokerogue-src
@@ -241,6 +233,8 @@ jobs:
           path: |
             ${{ env.IPA_NAME }}
             version.txt
-            ota-ios.zip
+            ota-code.zip
+            ota-assets.zip
+            ota-locales.zip
             ota-manifest-ios.json
           retention-days: 30
