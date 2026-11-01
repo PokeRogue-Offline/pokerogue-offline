@@ -29,6 +29,24 @@
  * stripLeadingSegment() already expects (strips exactly one leading path
  * segment per entry). This means the native unzip side needs NO changes
  * at all to support the three-way split.
+ *
+ * ── Legacy single-bundle compatibility shim ──────────────────────────────
+ * Also writes `ota-legacy.zip` - a `zip -r ota-legacy.zip dist` of the
+ * WHOLE distDir, byte-for-byte the pre-split single-bundle format - plus
+ * an `otaBundleSha256` field on the same manifest object. This exists for
+ * installs that reached their CURRENT build via an in-app OTA update from
+ * before this split shipped: their running JS is still the OLD
+ * mobile-updater.ts, which (a) never checks `schemaVersion` before reading
+ * a manifest, so it happily accepts THIS v2 manifest once `channel`/
+ * `nativeFingerprint` match, and (b) then looks for a single asset
+ * literally named `PokeRogueOffline-<platform>-ota.zip` and reads
+ * `manifest.otaBundleSha256` - neither of which this v2-only manifest
+ * used to provide, which silently stranded those installs (otaMatches
+ * came back true, but the asset it then looked for no longer existed, so
+ * checkForMobileUpdate() returned null - "no update available" - forever).
+ * Shipping both shapes in one manifest, and both the split zips AND this
+ * combined one, lets old and new clients each read the one file they
+ * understand without needing a version gate on the server side.
  */
 
 const fs = require("fs");
@@ -185,6 +203,17 @@ function zipChannel(stagingRoot, channel, outPath) {
   execFileSync("zip", ["-r", "-X", outPath, channel], { cwd: stagingRoot, stdio: "inherit" });
 }
 
+/**
+ * The legacy single-bundle zip - see this file's header comment. `distDir`
+ * is zipped as a single top-level "dist" entry (cwd'd to its parent, same
+ * as the per-channel zips are cwd'd to stagingRoot), so OtaUnzip's one-
+ * segment strip lands index.html etc directly at destDir's root, exactly
+ * like the original pre-split format did.
+ */
+function zipLegacyBundle(distDir, outPath) {
+  execFileSync("zip", ["-r", "-X", outPath, path.basename(distDir)], { cwd: path.dirname(distDir), stdio: "inherit" });
+}
+
 function sha256File(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
@@ -247,6 +276,15 @@ function main() {
       assetName: zipName,
     };
   }
+
+  // Legacy single-bundle shim (see this file's header comment) - zipped
+  // from distDir directly, NOT from stagingRoot, since it needs every
+  // channel's files together under one "dist/" wrapper, same as the
+  // original pre-split format.
+  const legacyZipPath = path.join(outDir, "ota-legacy.zip");
+  console.error(`[split-ota-bundle] legacy bundle: zipping ${distDir} to ${legacyZipPath}`);
+  zipLegacyBundle(distDir, legacyZipPath);
+  manifest.otaBundleSha256 = sha256File(legacyZipPath);
 
   const manifestPath = path.join(outDir, `ota-manifest-${platform}.json`);
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
