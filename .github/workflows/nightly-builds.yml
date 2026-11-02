@@ -20,6 +20,7 @@ jobs:
           gh workflow run create-release.yaml --repo ${{ github.repository }} --ref "${{ github.ref_name }}" \
             -f dev=true \
             -f branch=beta \
+            -f artifacts_only=true \
             -f notify=false
           echo "triggered_after=$TS" >> $GITHUB_OUTPUT
 
