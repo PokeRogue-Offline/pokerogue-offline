@@ -78,7 +78,7 @@ jobs:
         uses: ./.github/actions/inject-dropbox-app-key
         with:
           target-file: pokerogue-src/src/system/offline/dropbox-backup.ts
-          dropbox-app-key: ${{ inputs.dev && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
+          dropbox-app-key: ${{ inputs.dev && vars.DROPBOX_APP_KEY_DEV || vars.DROPBOX_APP_KEY }}
           redirect-uri: ${{ inputs.dev && 'xyz.scooom.pkrdev://dropbox-auth-callback' || 'xyz.scooom.pkr://dropbox-auth-callback' }}
 
       - name: Install PokeRogue dependencies
@@ -233,7 +233,7 @@ jobs:
       - name: Restore pinned debug keystore
         run: |
           mkdir -p ~/.android
-          echo "${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}" | base64 -d > ~/.android/debug.keystore
+          echo "${{ vars.ANDROID_DEBUG_KEYSTORE_B64 }}" | base64 -d > ~/.android/debug.keystore
 
       - name: Build release APK
         working-directory: pokerogue-src/android

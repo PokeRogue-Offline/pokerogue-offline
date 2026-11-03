@@ -125,4 +125,4 @@ jobs:
                -H "Markdown: yes" \
                -H "Click: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
                -d "The Nightly Builds wrapper failed (not the triggered beta build itself - check its own run for that). See the linked run for which step failed." \
-               ${{ secrets.NTFY_URL }}
+               ${{ vars.NTFY_URL }}
