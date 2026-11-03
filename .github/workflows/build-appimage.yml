@@ -120,19 +120,19 @@ jobs:
         uses: ./.github/actions/inject-discord-client-id
         with:
           target-file: pokerogue-src/discord-rpc.cjs
-          discord-client-id: ${{ secrets.DISCORD_CLIENT_ID }}
+          discord-client-id: ${{ vars.DISCORD_CLIENT_ID }}
 
       - name: Inject Google OAuth credentials into main.cjs
         uses: ./.github/actions/inject-google-desktop-oauth
         with:
-          client-id: ${{ secrets.GOOGLE_DESKTOP_CLIENT_ID }}
-          client-secret: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+          client-id: ${{ vars.GOOGLE_DESKTOP_CLIENT_ID }}
+          client-secret: ${{ vars.GOOGLE_DESKTOP_CLIENT_SECRET }}
 
       - name: Inject Dropbox App Key
         uses: ./.github/actions/inject-dropbox-app-key
         with:
           target-file: pokerogue-src/main.cjs
-          dropbox-app-key: ${{ inputs.dev && secrets.DROPBOX_APP_KEY_DEV || secrets.DROPBOX_APP_KEY }}
+          dropbox-app-key: ${{ inputs.dev && vars.DROPBOX_APP_KEY_DEV || vars.DROPBOX_APP_KEY }}
 
       - name: Set electron main in package.json
         uses: ./.github/actions/set-electron-package-metadata

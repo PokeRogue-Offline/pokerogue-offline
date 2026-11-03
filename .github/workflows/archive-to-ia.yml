@@ -30,8 +30,8 @@ jobs:
 
       - name: Upload release to Internet Archive
         env:
-          IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
-          IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+          IAS3_ACCESS_KEY: ${{ vars.IAS3_ACCESS_KEY }}
+          IAS3_SECRET_KEY: ${{ vars.IAS3_SECRET_KEY }}
         run: python3 scripts/archive-to-ia.py --event-path "$GITHUB_EVENT_PATH"
 
       - name: Notify on failure
@@ -42,4 +42,4 @@ jobs:
                -H "Markdown: yes" \
                -H "Click: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
                -d "Failed to archive ${{ github.event.release.tag_name }} to the Internet Archive." \
-               ${{ secrets.NTFY_URL }}
+               ${{ vars.NTFY_URL }}
