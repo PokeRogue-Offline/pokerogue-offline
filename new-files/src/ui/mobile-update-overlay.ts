@@ -26,6 +26,7 @@
 import {
   applyMobileUpdateAndRelaunch,
   cancelMobileDownload,
+  diagLog,
   downloadMobileUpdate,
   type MobileUpdateCheckResult,
 } from "#system/offline/mobile-updater";
@@ -175,6 +176,7 @@ function downloadingMessage(result: MobileUpdateCheckResult, receivedKb: number,
 
 /** Entry point: UpdateAvailableUiHandler calls this once, on Capacitor, after checkForMobileUpdate() returns a "ota" or "native-android" result. */
 export async function startMobileUpdateFlow(result: MobileUpdateCheckResult): Promise<void> {
+  await diagLog("OVERLAY-startMobileUpdateFlow-called", { kind: result.kind, version: result.version, buildNumber: result.buildNumber });
   show();
   setButton(null, false);
 
@@ -190,7 +192,9 @@ export async function startMobileUpdateFlow(result: MobileUpdateCheckResult): Pr
       },
       controller.signal,
     );
+    await diagLog("OVERLAY-download-succeeded");
   } catch (err) {
+    await diagLog("OVERLAY-download-threw-showing-retry", { err: String(err) });
     setProgress(null);
     setMessage(err instanceof Error ? err.message : "Update failed — retry available");
     setButton("Retry", true, () => startMobileUpdateFlow(result));
@@ -200,12 +204,15 @@ export async function startMobileUpdateFlow(result: MobileUpdateCheckResult): Pr
   if (result.kind === "ota") {
     // No separate user action for the OTA path - it can apply unattended,
     // unlike Android's native fallback below which hands off to the OS.
+    await diagLog("OVERLAY-ota-branch-installing-unattended");
     setProgress(null);
     setMessage("Installing application update…");
     setButton(null, false);
     try {
       await applyMobileUpdateAndRelaunch(result);
+      await diagLog("OVERLAY-ota-apply-returned-without-throwing");
     } catch (err) {
+      await diagLog("OVERLAY-ota-apply-threw-showing-retry", { err: String(err) });
       setMessage(err instanceof Error ? err.message : "Update failed — retry available");
       setButton("Retry", true, () => startMobileUpdateFlow(result));
     }
@@ -215,15 +222,19 @@ export async function startMobileUpdateFlow(result: MobileUpdateCheckResult): Pr
   // native-android: downloaded and verified, but applying means handing off
   // to Android's system installer - a real context switch, so this waits
   // for an explicit tap rather than firing it the instant the download ends.
+  await diagLog("OVERLAY-native-android-branch-awaiting-tap");
   setProgress(null);
   setMessage("Download complete — tap to continue to installer");
   setButton("Continue", false, async () => {
+    await diagLog("OVERLAY-native-android-continue-tapped");
     setMessage("Handing off to Android's installer…");
     setButton(null, false);
     try {
       await applyMobileUpdateAndRelaunch(result);
+      await diagLog("OVERLAY-native-android-apply-returned-hiding-overlay");
       hideMobileUpdateOverlay();
     } catch (err) {
+      await diagLog("OVERLAY-native-android-apply-threw-showing-retry", { err: String(err) });
       setMessage(err instanceof Error ? err.message : "Update failed — retry available");
       setButton("Retry", true, () => startMobileUpdateFlow(result));
     }

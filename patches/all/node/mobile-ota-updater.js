@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
+ * DEBUG BRANCH (debug/ota-lpm-tracing) - NOT for release.
+ *
+ * Same patch as the single-bundle OTA updater (matches upstream commit
+ * 6e48b62 - one commit before the "Slim OTA" channel-split rewrite), except
+ * both injection points below also call the new exported diagLog() so the
+ * two top-level `if (Capacitor.isNativePlatform())` conditions themselves
+ * show up in Documents/ota-debug.log, not just what happens inside them.
+ *
  * Patch: mobile-ota-updater.js
  *
- * Copies in #system/offline/mobile-updater.ts, its sibling
- * #system/offline/ota-parts.ts (the per-channel stage/activate/rollback
- * primitives mobile-updater.ts imports from), and #ui/mobile-update-
+ * Copies in #system/offline/mobile-updater.ts and #ui/mobile-update-
  * overlay.ts (the Capacitor OTA/native-fallback updater and its DOM
- * overlay UI - see new-files/ for the real logic), and wires
+ * overlay UI - see new-files/ for the real logic) and wires
  * reapplyActiveOtaBundleIfAny()'s boot hook into main.ts, so a previously-
  * applied OTA bundle is re-activated on every cold launch (otherwise a
  * full relaunch would silently fall back to whatever was originally
@@ -31,7 +37,6 @@
  *
  * Targets: pokerogue-src/src/main.ts
  *          pokerogue-src/src/system/offline/mobile-updater.ts (new file)
- *          pokerogue-src/src/system/offline/ota-parts.ts (new file)
  *          pokerogue-src/src/ui/mobile-update-overlay.ts (new file)
  */
 
@@ -79,25 +84,6 @@ if (fs.existsSync(UPDATER_PATH)) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-patch 1a: src/system/offline/ota-parts.ts (new file) - the per-channel
-// stage/activate/rollback primitives mobile-updater.ts (sub-patch 1 above)
-// imports from. Without this, mobile-updater.ts lands in pokerogue-src but
-// imports a sibling file that was never placed next to it, and Rolldown
-// fails to resolve "#system/offline/ota-parts" at build time.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const OTA_PARTS_PATH = path.join("pokerogue-src", "src", "system", "offline", "ota-parts.ts");
-if (fs.existsSync(OTA_PARTS_PATH)) {
-  console.log("SKIP ota-parts.ts — already exists");
-} else {
-  const otaPartsSrc = fs.readFileSync(
-    path.join(NEW_FILES_DIR, "src", "system", "offline", "ota-parts.ts"),
-    "utf8",
-  );
-  writeFile(OTA_PARTS_PATH, otaPartsSrc);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Sub-patch 1b: src/ui/mobile-update-overlay.ts (new file)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -131,13 +117,19 @@ if (mainSrc.includes("mobile-ota-updater")) {
   mainSrc = mainSrc.replace(
     IMPORT_ANCHOR,
     `${IMPORT_ANCHOR}\n` +
-      `import { reapplyActiveOtaBundleIfAny } from "#system/offline/mobile-updater";\n` +
+      `import { diagLog, reapplyActiveOtaBundleIfAny } from "#system/offline/mobile-updater";\n` +
       `\n` +
       `// mobile-ota-updater: re-point the WebView at a previously-applied OTA\n` +
-      `// bundle (if any) as early as possible.\n` +
-      `if ((window as any).Capacitor?.isNativePlatform?.()) {\n` +
-      `  reapplyActiveOtaBundleIfAny();\n` +
-      `}`,
+      `// bundle (if any) as early as possible. DEBUG BRANCH: wrapped so the\n` +
+      `// isNativePlatform() condition itself (true AND false) is logged, not just\n` +
+      `// what happens inside it.\n` +
+      `void (async () => {\n` +
+      `  const isNative = !!(window as any).Capacitor?.isNativePlatform?.();\n` +
+      `  await diagLog("MAIN-isNativePlatform", { isNative });\n` +
+      `  if (isNative) {\n` +
+      `    await reapplyActiveOtaBundleIfAny();\n` +
+      `  }\n` +
+      `})();`,
   );
 
   writeFile(MAIN_PATH, mainSrc);
@@ -166,16 +158,22 @@ if (titleSrc.includes("confirmOtaBootSuccess")) {
   requireAnchor(titleSrc, IMPORT_ANCHOR, 'version import in title-ui-handler.ts');
   titleSrc = titleSrc.replace(
     IMPORT_ANCHOR,
-    `${IMPORT_ANCHOR}import { confirmOtaBootSuccess } from "#system/offline/mobile-updater";\n`,
+    `${IMPORT_ANCHOR}import { confirmOtaBootSuccess, diagLog } from "#system/offline/mobile-updater";\n`,
   );
 
   titleSrc = titleSrc.replace(
     TITLE_ANCHOR,
     `${TITLE_ANCHOR}\n\n` +
       `    // mobile-ota-updater: title screen reached - this boot is good.\n` +
-      `    if ((window as any).Capacitor?.isNativePlatform?.()) {\n` +
-      `      confirmOtaBootSuccess();\n` +
-      `    }`,
+      `    // DEBUG BRANCH: wrapped so the isNativePlatform() condition itself\n` +
+      `    // (true AND false) is logged, not just what happens inside it.\n` +
+      `    void (async () => {\n` +
+      `      const isNative = !!(window as any).Capacitor?.isNativePlatform?.();\n` +
+      `      await diagLog("TITLE-isNativePlatform", { isNative });\n` +
+      `      if (isNative) {\n` +
+      `        await confirmOtaBootSuccess();\n` +
+      `      }\n` +
+      `    })();`,
   );
 
   writeFile(TITLE_UI_PATH, titleSrc);
