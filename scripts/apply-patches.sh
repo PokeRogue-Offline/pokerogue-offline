@@ -67,6 +67,8 @@ if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
   apply_patch "screenshot-button.js"         mobile
   if [[ "$MEMORY_PATCHES_ENABLED" == "true" ]]; then
     apply_patch "skip-legacy-ui-duplicate-textures.js" mobile
+    # Scooom dev builds only at runtime (isScoomDev); needs the prune patches above/earlier.
+    apply_patch "memory-logger.js" mobile
   fi
 fi
 

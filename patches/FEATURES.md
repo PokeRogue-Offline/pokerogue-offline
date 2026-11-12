@@ -116,6 +116,15 @@ patch at the time they were written:
   `apply-patches.sh` runs `mobile` before `android`; `fix-android-image-
   paths.js`'s anchors were resynced in the same change to expect this
   patch's guard already in place.
+- `patches/mobile/node/memory-logger.js` + `new-files/src/system/offline/
+  memory-logger.ts` — diagnostics only, active only in Scooom dev builds
+  (`isScoomDev`): appends a memory-composition snapshot (loaded textures and
+  estimated decoded size, decoded audio, scene counts, wave/biome) to
+  `Documents/memory-log.txt` on every new battle, every 15s, and on
+  visibility changes; readable in the iOS Files app. Estimates what the game
+  holds, not process RSS (WebKit has no such API). Runs after the prune
+  patches (needs `scooom-dev.ts` and the `pruneMoveAnimAssets()` call), inside
+  the same `MEMORY_PATCHES_ENABLED` block.
 
 ## Touch controls
 
