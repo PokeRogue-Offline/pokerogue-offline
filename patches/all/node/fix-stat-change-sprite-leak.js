@@ -2,6 +2,14 @@
 /**
  * Patch: fix-stat-change-sprite-leak.js
  *
+ * RETIRED 2026-10-30: PR #7738 (Phaser 4 upgrade, merged to beta
+ * 2026-10-29) shipped the fix below as part of its own rewrite of
+ * stat-stage-change-phase.ts - `statSprite.destroy()` is now called
+ * directly by upstream, and the `pokemon.disableMask()` anchor this patch
+ * used is gone (maskSprite/enableMask/disableMask were removed in favor of
+ * a filter-based mask). No longer invoked from scripts/apply-patches.sh.
+ * Left in place as history; see git log for the removal.
+ *
  * Upstream bug: StatStageChangePhase.playStatChangeAnimation() (src/phases/
  * stat-stage-change-phase.ts) creates a TileSprite for the stat-change arrow
  * overlay on every single stat change and fades it out, but never destroys
