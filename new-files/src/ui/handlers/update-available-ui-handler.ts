@@ -10,7 +10,7 @@ import { addBBCodeTextObject, addTextObject } from "#ui/text";
 import { UiHandler } from "#ui/ui-handler";
 import { addWindow } from "#ui/ui-theme";
 import { markdownToBBCode } from "#ui/utils/markdown-to-bbcode";
-import type BBCodeText from "phaser4-rex-plugins/plugins/gameobjects/tagtext/bbcodetext/BBCodeText";
+import type BBCodeText from "phaser3-rex-plugins/plugins/gameobjects/tagtext/bbcodetext/BBCodeText";
 
 /**
  * Offline-only "Update Available" screen. Opened once per launch (from
