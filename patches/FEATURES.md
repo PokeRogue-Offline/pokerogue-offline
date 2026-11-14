@@ -40,9 +40,6 @@ To remove or audit this feature, check all of:
   custom URL scheme for Dropbox OAuth redirect; exists solely for
   `dropbox-backup.ts`'s OAuth flow on Android. Called directly from
   `build-android.yml`, not through either apply script.
-- `patches/all/node/enable-touch-controls-quad-tap.js` — incidental, minor
-  coupling: imports `isCapacitor()` from `backup-provider.ts` purely as a
-  platform gate for an otherwise unrelated feature (see below).
 
 ## Native save import/export (mobile)
 
@@ -125,9 +122,9 @@ Two independent behaviors, not the same feature despite both being
 - `patches/all/node/touch-overlay-idle-opacity.js` — CSS var for D-pad/
   button idle opacity; depends on the "Touch Button Opacity" setting added
   by `app-settings-menu.js`.
-- `patches/all/node/enable-touch-controls-quad-tap.js` — quadruple-tap
-  gesture to re-enable touch controls; depends on `backup-provider.ts`'s
-  `isCapacitor()` only as a platform check (see Cloud backup above).
+- Quadruple-tap gesture to re-enable touch controls is now upstream
+  (pagefaultgames/pokerogue#7916); `screenshot-button.js` anchors on the
+  `main.ts` import line that change produces.
 
 ## AndroidManifest.xml edits
 
