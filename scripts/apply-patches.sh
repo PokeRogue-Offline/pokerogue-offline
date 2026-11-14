@@ -44,7 +44,6 @@ apply_patch "auto-drive-sync.js"              all
 apply_patch "externalize-capacitor-imports.js" all
 apply_patch "gacha-calendar.js"               all
 apply_patch "community-menu.js"               all
-apply_patch "enable-touch-controls-quad-tap.js" all
 
 apply_patch "update-available-screen.js" all
 # Copies in #system/offline/mobile-updater.ts and #ui/mobile-update-overlay.ts
