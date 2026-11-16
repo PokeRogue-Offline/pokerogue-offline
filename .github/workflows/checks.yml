@@ -1,0 +1,29 @@
+name: Checks
+
+# Fast repository-level checks that need nothing but this repo and Node -
+# no upstream clone, no build.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-fingerprint-coverage:
+    name: Native fingerprint coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Fails when a native-touching file is neither hashed into the native
+      # fingerprint nor explicitly excluded with a reason - see the script's
+      # header comment.
+      - name: Check native fingerprint coverage
+        run: node scripts/check-native-fingerprint-coverage.js
