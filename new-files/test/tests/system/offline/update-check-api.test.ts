@@ -99,21 +99,36 @@ describe("System - Offline - update-check-api", () => {
       expect(result[0].changelog).toBe("Fixed a bug.");
     });
 
-    it("falls back to the body minus asset-filename lines when the markers are empty", async () => {
+    it("shows the literal message, not the page's boilerplate, when the markers are empty", async () => {
       mockReleases([
         {
           tag_name: "v1.12.0.5-204",
           body:
             "## PokeRogueOffline v1.12.0.5\n\n" +
             "<!-- changelog:start -->\n<!-- changelog:end -->\n\n" +
-            "- **PokeRogueOffline.ipa** — iOS\n" +
-            "- **PokeRogueOffline-x64.dmg** — macOS (Intel)",
+            "### Downloads\n\n" +
+            "| Platform | Installer | Notes |\n|---|---|---|\n" +
+            "| Windows | [PokeRogueOffline.exe](https://example.invalid/PokeRogueOffline.exe) | Portable |\n\n" +
+            "Already have the app? It updates itself.",
         },
       ]);
 
       const result = await checkForUpdates("1.0.0.0", 0);
 
-      expect(result[0].changelog).toBe("## PokeRogueOffline v1.12.0.5");
+      expect(result[0].changelog).toBe("No changelog available for this version.");
+    });
+
+    it("falls back to the body minus asset-filename lines when there are no markers at all", async () => {
+      mockReleases([
+        {
+          tag_name: "v1.12.0.5-204",
+          body: "Hand-written notes\n\n- **PokeRogueOffline.ipa** — iOS\n- **PokeRogueOffline-x64.dmg** — macOS (Intel)",
+        },
+      ]);
+
+      const result = await checkForUpdates("1.0.0.0", 0);
+
+      expect(result[0].changelog).toBe("Hand-written notes");
     });
 
     it("falls back to a literal message when the body is empty entirely", async () => {

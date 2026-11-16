@@ -153,9 +153,14 @@ async function latestStableIsNotNewer(installedVersion: string, installedBuildNu
 }
 
 /**
- * Returns the maintainer-authored changelog for a release, or a graceful
- * fallback when none has been added yet: the release's own body with the
- * marker lines and its own download-asset lines stripped out.
+ * Returns the maintainer-authored changelog for a release: the text
+ * between the changelog markers. When the markers are there but nothing
+ * has been written between them yet, that is a plain "no changelog"
+ * message - the rest of the body is the release page's download table and
+ * file notes, not something to show in the game.
+ *
+ * Only a body with no markers at all (an old or hand-written release) falls
+ * back to the body itself, with its download-asset lines stripped out.
  */
 function extractChangelog(body: string | null | undefined): string {
   const text = (body ?? "").replace(/\r\n/g, "\n");
@@ -163,10 +168,11 @@ function extractChangelog(body: string | null | undefined): string {
   const startIdx = text.indexOf(CHANGELOG_START);
   const endIdx = text.indexOf(CHANGELOG_END);
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    // The markers are there, so everything outside them is the release
+    // page's own boilerplate (download table, file notes) - never changelog
+    // text, whether or not a changelog has been written yet.
     const between = text.slice(startIdx + CHANGELOG_START.length, endIdx).trim();
-    if (between.length > 0) {
-      return between;
-    }
+    return between.length > 0 ? between : FALLBACK_NO_CHANGELOG;
   }
 
   const filtered = text
