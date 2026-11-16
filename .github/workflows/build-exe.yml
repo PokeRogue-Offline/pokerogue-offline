@@ -115,6 +115,7 @@ jobs:
           cp configs/desktop/electron/main.cjs pokerogue-src/main.cjs
           cp configs/desktop/electron/preload.cjs pokerogue-src/preload.cjs
           cp configs/desktop/electron/updater.cjs pokerogue-src/updater.cjs
+          cp configs/desktop/electron/update-io.cjs pokerogue-src/update-io.cjs
           cp configs/desktop/electron/discord-rpc.cjs pokerogue-src/discord-rpc.cjs
           cp configs/desktop/electron/electron-builder.windows.json pokerogue-src/electron-builder.json
           cp docs/appIcon.ico pokerogue-src/appIcon.ico

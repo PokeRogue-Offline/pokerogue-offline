@@ -102,6 +102,7 @@ jobs:
           cp ${{ github.workspace }}/configs/desktop/electron/main.cjs pokerogue-src/main.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/preload.cjs pokerogue-src/preload.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/updater.cjs pokerogue-src/updater.cjs
+          cp ${{ github.workspace }}/configs/desktop/electron/update-io.cjs pokerogue-src/update-io.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/discord-rpc.cjs pokerogue-src/discord-rpc.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/electron-builder.appimage.json pokerogue-src/electron-builder.json
           cp ${{ github.workspace }}/docs/appIcon.png pokerogue-src/appIcon.png

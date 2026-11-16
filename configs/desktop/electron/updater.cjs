@@ -1,8 +1,8 @@
 const { app, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { execFile } = require('child_process');
+const { downloadToFile, sha256File, parseChecksums, swapIntoPlace, makeExecutable } = require('./update-io.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────
 // In-Electron self-updater. Replaces this app's own on-disk binary (exe /
@@ -231,47 +231,6 @@ function getStagingDir() {
   return path.join(getInstallDir(), '.pokerogue-update-staging');
 }
 
-async function downloadToFile(url, destPath, onProgress, signal) {
-  const response = await fetch(url, { signal });
-  if (!response.ok || !response.body) {
-    throw new Error(`Download failed: HTTP ${response.status}`);
-  }
-  const total = Number(response.headers.get('content-length')) || 0;
-  let received = 0;
-
-  const fileStream = fs.createWriteStream(destPath);
-  try {
-    for await (const chunk of response.body) {
-      received += chunk.length;
-      fileStream.write(chunk);
-      onProgress?.(received, total);
-    }
-  } finally {
-    await new Promise(resolve => fileStream.end(resolve));
-  }
-}
-
-function parseChecksums(text) {
-  const map = new Map();
-  for (const line of text.split('\n')) {
-    const match = line.match(/^([a-f0-9]{64})\s+\*?(.+)$/);
-    if (match) {
-      map.set(match[2].trim(), match[1]);
-    }
-  }
-  return map;
-}
-
-function sha256File(filePath) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash('sha256');
-    const stream = fs.createReadStream(filePath);
-    stream.on('data', chunk => hash.update(chunk));
-    stream.on('end', () => resolve(hash.digest('hex')));
-    stream.on('error', reject);
-  });
-}
-
 function extractTarGz(archivePath, destDir) {
   // Both macOS and Linux ship `tar` out of the box; this only runs on
   // darwin, but using the system binary avoids adding a tar-parsing
@@ -319,15 +278,15 @@ function cleanupStaleSwap() {
   fs.rmSync(getStagingDir(), { recursive: true, force: true });
 }
 
-/** Swaps the staged download into place and returns the path to relaunch. */
+/**
+ * Swaps the staged download into place and returns the path to relaunch.
+ * Every platform goes through swapIntoPlace(), which puts the original back
+ * if the new one cannot be moved in.
+ */
 async function applyUpdate(stagedPath) {
   if (process.platform === 'win32') {
     const target = process.execPath;
-    const oldPath = `${target}.old`;
-    fs.rmSync(oldPath, { force: true });
-    fs.renameSync(target, oldPath);
-    fs.renameSync(stagedPath, target);
-    writePendingSwapFlag(oldPath);
+    writePendingSwapFlag(swapIntoPlace(target, stagedPath));
     return target;
   }
 
@@ -336,11 +295,10 @@ async function applyUpdate(stagedPath) {
     if (!target) {
       throw new Error('APPIMAGE environment variable not set - not running as an AppImage, cannot self-update.');
     }
-    const oldPath = `${target}.old`;
-    fs.rmSync(oldPath, { force: true });
-    fs.renameSync(target, oldPath);
-    fs.renameSync(stagedPath, target);
-    writePendingSwapFlag(oldPath);
+    // Before the swap, not after: once the file is at `target` it has to be
+    // launchable, and rename() keeps whatever mode the staged file has.
+    makeExecutable(stagedPath);
+    writePendingSwapFlag(swapIntoPlace(target, stagedPath));
     return target;
   }
 
@@ -357,11 +315,7 @@ async function applyUpdate(stagedPath) {
     }
     const newBundlePath = path.join(extractDir, extractedName);
 
-    const oldPath = `${bundlePath}.old`;
-    fs.rmSync(oldPath, { recursive: true, force: true });
-    fs.renameSync(bundlePath, oldPath);
-    fs.renameSync(newBundlePath, bundlePath);
-    writePendingSwapFlag(oldPath);
+    writePendingSwapFlag(swapIntoPlace(bundlePath, newBundlePath));
 
     return path.join(bundlePath, 'Contents', 'MacOS', path.basename(process.execPath));
   }
@@ -372,6 +326,13 @@ async function applyUpdate(stagedPath) {
 function relaunchAndExit(execPath) {
   app.relaunch({ execPath });
   app.exit(0);
+}
+
+/** Progress can outlive the window it was started from (closed mid-download) - sending to a destroyed one throws. */
+function sendToWindow(win, channel, payload) {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send(channel, payload);
+  }
 }
 
 let registered = false;
@@ -441,11 +402,15 @@ function registerUpdater(mainWindow) {
       await downloadToFile(
         asset.browser_download_url,
         stagedPath,
-        (received, total) => mainWindow.webContents.send('updater-download-progress', { received, total }),
+        (received, total) => sendToWindow(mainWindow, 'updater-download-progress', { received, total, name: assetName }),
         controller.signal,
+        { expectedBytes: asset.size },
       );
 
       const checksumsResponse = await fetch(checksumsAsset.browser_download_url, { signal: controller.signal });
+      if (!checksumsResponse.ok) {
+        throw new Error(`Could not fetch the release checksums: HTTP ${checksumsResponse.status}`);
+      }
       const checksums = parseChecksums(await checksumsResponse.text());
       const expectedHash = checksums.get(assetName);
       if (!expectedHash) {
