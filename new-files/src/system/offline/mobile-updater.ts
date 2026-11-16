@@ -37,42 +37,60 @@
  * both sides, not just here. The manifest's `channel` field is checked as a
  * second, independent safety gate on top of the tag match.
  *
- * ── Atomic activation and rollback ───────────────────────────────────────
+ * ── Activation and rollback ──────────────────────────────────────────────
  * Each channel is staged into a scratch directory and only swapped into
  * the one served directory (`ota/active/`) after the stage is fully
  * written - never written into the currently-active content in place -
- * and a per-channel backup of what was there before is kept until the new
- * version proves it boots. This makes an interrupted OTA (app killed
- * mid-download, mid-write, disk full, or a channel that writes fine but
- * doesn't boot) structurally unable to leave the app unable to start: a
- * channel's pointer only ever names a version that was both fully staged
- * AND previously confirmed to boot (see reapplyActiveOtaBundleIfAny /
- * confirmOtaBootSuccess, which delegate to ota-parts.ts - see that file
- * for the full per-channel stage/backup/swap/rollback mechanics),
- * mirroring the same discipline updater.cjs already uses on desktop
- * (stage first, swap atomically, keep the previous version recoverable
- * until the new one proves itself).
+ * and a per-channel backup of the last CONFIRMED version is kept until
+ * the new version proves it boots.
+ *
+ * The swap itself is several directory renames, so it is NOT atomic: the
+ * app can be killed with a channel half moved. Earlier versions of this
+ * comment claimed that state could not occur; it could, and boot then saw
+ * a confirmed pointer over half-swapped files and never recovered. It is
+ * now handled explicitly: a write-ahead marker is written before the
+ * first rename and removed after the new pointer is written, and the boot
+ * hook finishes or undoes any swap whose marker is still there before
+ * anything is served. A version that is fully swapped in but then fails
+ * to reach the title screen on repeated launches is rolled back to the
+ * backup (see reapplyActiveOtaBundleIfAny / confirmOtaBootSuccess, and
+ * ota-core.ts for the mechanics, which the desktop build shares).
+ *
+ * OTA content is also tied to the native build it was installed under:
+ * after the app itself is reinstalled or updated to a build with a
+ * different native fingerprint, leftover OTA content is discarded on the
+ * next launch instead of being served over the newer bundled content.
  */
 
-import { isScoomDev } from "#system/offline/scooom-dev";
+import {
+  type ChannelSize,
+  estimateRequiredBytes,
+  findApplicableRelease as coreFindApplicableRelease,
+  type MatchedRelease,
+  type ReleaseAsset,
+  type ReleaseLike,
+  TAG_PATTERN,
+} from "#system/offline/ota-core";
 import {
   applyChannelUpdate,
   bootstrapActive,
   CHANNELS,
+  type ChannelName,
   confirmPartsBootSuccess,
   getActiveDirUri,
+  getFreeBytes,
   isOtaBootstrapped,
+  markPartsLoadReached,
   readChannelPointer,
   reapplyActivePartsIfAny,
-  type ChannelName,
+  type UnzipExpectation,
 } from "#system/offline/ota-parts";
+import { isScoomDev } from "#system/offline/scooom-dev";
 
 const OWNER = "PokeRogue-Offline";
 const REPO = "pokerogue-offline";
 const RELEASES_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=100`;
-
-const TAG_PATTERN = /^v(\d+\.\d+\.\d+(?:\.\d+)?)-(\d+)$/;
-const DEV_TAG_PATTERN = /^dev-v(\d+\.\d+\.\d+(?:\.\d+)?)-(\d+)$/;
+const LATEST_RELEASE_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 
 // Substituted at build time by .github/actions/inject-native-fingerprint,
 // the same placeholder-injection mechanism used for OFFLINE_BUILD_NUMBER
@@ -195,6 +213,12 @@ export interface MobileOtaChannelUpdate {
   asset: GhAsset;
   /** The channel's new content-hash version, from the manifest - passed straight through to bootstrapActive()/applyChannelUpdate(). */
   version: string;
+  /** Size of the zip in bytes (manifest, else the GitHub asset's own size); 0 when neither is known. */
+  bytes: number;
+  /** Size of the channel once unzipped, when the manifest says. */
+  unpackedBytes?: number;
+  /** What the native unzip must find: the zip's exact size and its number of file entries. Absent fields are not checked. */
+  expect: UnzipExpectation;
 }
 
 export interface MobileUpdateCheckResult {
@@ -207,13 +231,9 @@ export interface MobileUpdateCheckResult {
   apkAsset?: GhAsset;
 }
 
-interface GhAsset {
-  name: string;
-  browser_download_url: string;
-}
+type GhAsset = ReleaseAsset;
 
-interface GhRelease {
-  tag_name: string;
+interface GhRelease extends ReleaseLike {
   draft: boolean;
   prerelease: boolean;
   assets: GhAsset[];
@@ -223,6 +243,12 @@ interface OtaManifestChannel {
   version: string;
   sha256: string;
   assetName: string;
+  /** Size of the channel zip. Optional: manifests published before the truncation guard don't have it. */
+  bytes?: number;
+  /** Number of file entries in the channel zip. Optional, as above. */
+  entries?: number;
+  /** Total size of the channel's files once unzipped. Optional, as above. */
+  unpackedBytes?: number;
 }
 
 /**
@@ -244,36 +270,6 @@ interface OtaManifest {
   code: OtaManifestChannel;
   assets: OtaManifestChannel;
   locales: OtaManifestChannel;
-}
-
-function tagPattern(): RegExp {
-  return isScoomDev ? DEV_TAG_PATTERN : TAG_PATTERN;
-}
-
-function extractVersion(versionString: string): number[] {
-  const regex = /^\d+\.\d+\.\d+(?:\.\d+)?$/;
-  if (!regex.test(versionString)) {
-    throw new Error(`Invalid version string (${versionString}) in mobile updater!`);
-  }
-  const versionArray = versionString.split(".").map(v => Number.parseInt(v, 10));
-  if (versionArray.length === 3) {
-    versionArray.push(0);
-  }
-  return versionArray;
-}
-
-function compareVersions(versionA: string, versionB: string): -1 | 0 | 1 {
-  const a = extractVersion(versionA);
-  const b = extractVersion(versionB);
-  for (let i = 0; i < 4; i++) {
-    if (a[i] > b[i]) {
-      return 1;
-    }
-    if (a[i] < b[i]) {
-      return -1;
-    }
-  }
-  return 0;
 }
 
 function parseNextLink(linkHeader: string | null): string | null {
@@ -309,47 +305,47 @@ async function fetchAllReleases(): Promise<GhRelease[]> {
   return releases.filter(r => !r.draft && (isScoomDev || !r.prerelease));
 }
 
-interface MatchedRelease {
-  version: string;
-  buildNumber: number;
-  assets: GhAsset[];
-}
-
-function findApplicableRelease(releases: GhRelease[], installedVersion: string, installedBuildNumber: number): MatchedRelease | null {
-  const pattern = tagPattern();
-  console.log(
-    `[mobile-updater] findApplicableRelease: ${releases.length} release(s) fetched, isScoomDev=${isScoomDev}, pattern=${pattern}, installed=${installedVersion}+${installedBuildNumber}`,
-  );
-  const byVersion = new Map<string, MatchedRelease>();
-  for (const release of releases) {
-    const match = release.tag_name?.match(pattern);
-    if (!match) {
-      console.log(`[mobile-updater]   skip "${release.tag_name}" - doesn't match pattern`);
-      continue;
-    }
-    const [, versionStr, buildStr] = match;
-    const buildNumber = Number.parseInt(buildStr, 10);
-    const existing = byVersion.get(versionStr);
-    if (!existing || buildNumber > existing.buildNumber) {
-      byVersion.set(versionStr, { version: versionStr, buildNumber, assets: release.assets || [] });
+/**
+ * The releases worth considering for this build. Stable builds ask for
+ * GitHub's single "latest" release (the newest published, non-prerelease
+ * one - the only release a stable build would pick anyway) instead of
+ * paging the entire release history, and fall back to the full list if
+ * that request fails or returns something unexpected. Dev builds always
+ * page: dev releases are prereleases, which "latest" never returns.
+ */
+async function fetchCandidateReleases(): Promise<GhRelease[]> {
+  if (!isScoomDev) {
+    try {
+      const response = await fetch(LATEST_RELEASE_URL);
+      if (response.ok) {
+        const latest = (await response.json()) as GhRelease | null;
+        if (latest && typeof latest.tag_name === "string" && TAG_PATTERN.test(latest.tag_name) && !latest.draft && !latest.prerelease) {
+          return [latest];
+        }
+      }
+    } catch {
+      // fall through to the full list
     }
   }
-  console.log(`[mobile-updater]   matched tags, highest build per version:`, Object.fromEntries(byVersion));
+  return fetchAllReleases();
+}
 
-  const applicable = Array.from(byVersion.values())
-    .filter(r => {
-      const cmp = compareVersions(r.version, installedVersion);
-      return cmp === 1 || (cmp === 0 && r.buildNumber > installedBuildNumber);
-    })
-    .sort((a, b) => compareVersions(a.version, b.version) || a.buildNumber - b.buildNumber);
-
-  const result = applicable.length > 0 ? applicable[applicable.length - 1] : null;
-  console.log(`[mobile-updater]   applicable (newer than installed):`, applicable, `-> picked:`, result);
+/** Newest release ahead of the installed build for this build's channel (stable or dev), or null. */
+export function findApplicableRelease(releases: ReleaseLike[], installedVersion: string, installedBuildNumber: number): MatchedRelease | null {
+  const result = coreFindApplicableRelease(releases, installedVersion, installedBuildNumber, isScoomDev);
+  console.log(
+    `[mobile-updater] findApplicableRelease: ${releases.length} release(s), isScoomDev=${isScoomDev}, installed=${installedVersion}+${installedBuildNumber} -> picked:`,
+    result ? `${result.version}+${result.buildNumber}` : null,
+  );
   return result;
 }
 
 function findAsset(assets: GhAsset[], name: string): GhAsset | undefined {
   return assets.find(a => a.name === name);
+}
+
+function positiveInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 /**
@@ -372,8 +368,7 @@ async function resolveOtaChannels(
   releaseAssets: GhAsset[],
   manifest: OtaManifest,
 ): Promise<Partial<Record<ChannelName, MobileOtaChannelUpdate>> | null> {
-  const fs = filesystem();
-  const bootstrapped = fs ? await isOtaBootstrapped(fs) : false;
+  const bootstrapped = await isOtaBootstrapped();
   console.log(`[mobile-updater] resolveOtaChannels: bootstrapped=${bootstrapped}`);
 
   const platformName = plat === "android" ? "Android" : "iOS";
@@ -383,7 +378,7 @@ async function resolveOtaChannels(
     const manifestChannel = manifest[channel];
     let needed = !bootstrapped; // first-ever OTA needs all three, regardless of version comparison
     if (!needed) {
-      const installedPointer = fs ? await readChannelPointer(fs, channel) : null;
+      const installedPointer = await readChannelPointer(channel);
       needed = installedPointer?.version !== manifestChannel.version;
     }
     if (!needed) {
@@ -396,7 +391,24 @@ async function resolveOtaChannels(
     if (!asset) {
       return null; // caller treats a null return as "unusable" - see checkForMobileUpdate
     }
-    result[channel] = { asset, version: manifestChannel.version };
+    // The manifest's numbers are the authority; GitHub's own asset size is
+    // an equally exact stand-in for manifests published before `bytes`.
+    const bytes = positiveInt(manifestChannel.bytes) ?? positiveInt(asset.size) ?? 0;
+    const expect: UnzipExpectation = {};
+    if (bytes > 0) {
+      expect.bytes = bytes;
+    }
+    const entries = positiveInt(manifestChannel.entries);
+    if (entries !== null) {
+      expect.entries = entries;
+    }
+    result[channel] = {
+      asset,
+      version: manifestChannel.version,
+      bytes,
+      unpackedBytes: positiveInt(manifestChannel.unpackedBytes) ?? undefined,
+      expect,
+    };
   }
 
   return result;
@@ -436,7 +448,7 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
   }
 
   try {
-    const releases = await fetchAllReleases();
+    const releases = await fetchCandidateReleases();
     const release = findApplicableRelease(releases, installedVersion, installedBuildNumber);
     if (!release) {
       console.log(`[mobile-updater] no applicable release found - already up to date, or nothing matched - returning null`);
@@ -516,11 +528,123 @@ export async function checkForMobileUpdate(installedVersion: string, installedBu
   }
 }
 
-// ── Download + verify ───────────────────────────────────────────────────
+// ── Download ────────────────────────────────────────────────────────────
 
 let activeDownloadController: AbortController | null = null;
 let stagedOtaChannelPaths: Partial<Record<ChannelName, string>> = {};
 let stagedApkPath: string | null = null;
+
+/** One file the update downloads: an OTA channel zip, or the APK. */
+export interface MobileDownloadItem {
+  /** "code" | "assets" | "locales" for OTA channels, "apk" for the Android installer. */
+  id: ChannelName | "apk";
+  /** Total size in bytes; 0 when not known up front. */
+  bytes: number;
+}
+
+export interface MobileDownloadProgress {
+  /** Which item this progress is for - see describeMobileDownload(). */
+  id: ChannelName | "apk";
+  /** Position of that item in the download order, from 0. */
+  index: number;
+  /** Bytes of this item received so far. */
+  received: number;
+  /** Total bytes of this item; 0 when unknown. */
+  total: number;
+}
+
+/** Everything downloadMobileUpdate() will fetch for this result, in order, with sizes - for showing progress per file. */
+export function describeMobileDownload(result: MobileUpdateCheckResult): MobileDownloadItem[] {
+  if (result.kind === "ota") {
+    return CHANNELS.filter(channel => result.otaChannels?.[channel]).map(channel => ({ id: channel, bytes: result.otaChannels![channel]!.bytes }));
+  }
+  if (result.kind === "native-android" && result.apkAsset) {
+    return [{ id: "apk", bytes: positiveInt(result.apkAsset.size) ?? 0 }];
+  }
+  return [];
+}
+
+const OTA_DOWNLOAD_PREFIX = "ota-download-";
+const APK_DOWNLOAD_PREFIX = "update-";
+
+/** Deletes a downloaded file by the URI downloadToFile() returned. Never throws. */
+async function deleteDownloaded(uri: string | null | undefined): Promise<void> {
+  if (!uri) {
+    return;
+  }
+  try {
+    await filesystem()?.deleteFile({ path: uri });
+  } catch {
+    // already gone, or not ours to delete - nothing useful to do about it
+  }
+}
+
+/**
+ * Removes update downloads left in the cache directory by an earlier
+ * launch: a download that was interrupted, zips whose apply was cut short,
+ * or an APK that has already been handed to the installer. Only runs at
+ * boot, when no download of this launch can exist yet.
+ */
+async function sweepStaleDownloads(): Promise<void> {
+  const fs = filesystem();
+  if (!fs) {
+    return;
+  }
+  try {
+    const { files } = await fs.readdir({ path: "", directory: "CACHE" });
+    for (const file of files ?? []) {
+      const name: string = typeof file === "string" ? file : file?.name;
+      if (!name) {
+        continue;
+      }
+      const isOtaZip = name.startsWith(OTA_DOWNLOAD_PREFIX) && name.endsWith(".zip");
+      const isApk = name.startsWith(APK_DOWNLOAD_PREFIX) && name.endsWith(".apk");
+      if (isOtaZip || isApk) {
+        await fs.deleteFile({ path: name, directory: "CACHE" }).catch(() => {});
+      }
+    }
+  } catch {
+    // cache directory unreadable - nothing to sweep
+  }
+}
+
+function formatMb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+/**
+ * Refuses to start a download that cannot fit. For OTA the peak is every
+ * channel zip plus every channel unzipped (see estimateRequiredBytes); for
+ * the APK it is the file itself. Skipped - never failed - when the free
+ * space or any size is unknown: this is a courtesy check, and must not be
+ * able to block an update on its own inability to measure.
+ */
+async function assertEnoughFreeSpace(result: MobileUpdateCheckResult): Promise<void> {
+  let required: number;
+  if (result.kind === "ota") {
+    const sizes: ChannelSize[] = [];
+    for (const update of Object.values(result.otaChannels ?? {})) {
+      if (!update || update.bytes <= 0) {
+        return;
+      }
+      sizes.push({ bytes: update.bytes, unpackedBytes: update.unpackedBytes });
+    }
+    required = estimateRequiredBytes(sizes);
+  } else {
+    required = positiveInt(result.apkAsset?.size) ?? 0;
+  }
+  if (required <= 0) {
+    return;
+  }
+  const free = await getFreeBytes();
+  if (free === null) {
+    return;
+  }
+  console.log(`[mobile-updater] free-space check: need ~${required} bytes, ${free} free`);
+  if (free < required) {
+    throw new Error(`Not enough free storage for this update: about ${formatMb(required)} needed, ${formatMb(free)} available.`);
+  }
+}
 
 /**
  * Downloads `url` straight to a file in app-private cache storage via
@@ -534,10 +658,11 @@ let stagedApkPath: string | null = null;
  * then the app reloaded with none of the staging ever having logged, which
  * only fits a content-process kill-and-recover, not a real finish). Checksum
  * verification is dropped entirely now (trusting the HTTPS transport
- * instead - a deliberate choice, not an oversight), and ota-parts.ts's
- * bootstrapActive()/applyChannelUpdate() unzip the downloaded zip via
- * native code (configs/capacitor-plugins/ota-unzip) instead of ever
- * loading it whole into JS.
+ * instead - a deliberate choice, not an oversight); what IS checked,
+ * natively and without reading the file, is that the zip has exactly the
+ * size the release says and unzips to exactly the number of entries the
+ * manifest says (see the OtaUnzip plugin) - enough to catch a truncated
+ * download, which is the failure HTTPS does not rule out.
  *
  * `signal`: FileTransfer.downloadFile() has no native cancellation hook, so
  * aborting here only stops this call from waiting on it - the native
@@ -564,8 +689,10 @@ async function downloadToFile(
     }
   });
 
+  let onAbort: (() => void) | null = null;
   const abortPromise = new Promise<never>((_, reject) => {
-    signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 
   try {
@@ -573,37 +700,60 @@ async function downloadToFile(
       throw new DOMException("Aborted", "AbortError");
     }
     await Promise.race([ft.downloadFile({ url, path: uri, progress: true }), abortPromise]);
+  } catch (err) {
+    await deleteDownloaded(uri); // don't leave a partial file behind
+    throw err;
   } finally {
     listenerHandle.remove();
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 
   return uri;
 }
 
 /** Downloads (never activates - see applyMobileUpdateAndRelaunch) whatever checkForMobileUpdate() last found applicable. */
-export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onProgress: (p: { received: number; total: number }) => void, signal: AbortSignal): Promise<void> {
+export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onProgress: (p: MobileDownloadProgress) => void, signal: AbortSignal): Promise<void> {
   console.log(`[mobile-updater] downloadMobileUpdate() called with kind="${result.kind}"`);
   if (result.kind === "native-ios-notify-only") {
     throw new Error("No downloadable update for this platform/release.");
   }
 
+  await assertEnoughFreeSpace(result);
+
   const controller = new AbortController();
-  signal.addEventListener("abort", () => controller.abort());
+  const forwardAbort = () => controller.abort();
+  signal.addEventListener("abort", forwardAbort, { once: true });
   activeDownloadController = controller;
+
+  const items = describeMobileDownload(result);
 
   try {
     if (result.kind === "ota") {
-      stagedOtaChannelPaths = {};
-      // Sequential, one channel at a time - simpler than merging progress
-      // across parallel downloads, and channel zips are each far smaller
-      // than the old single combined bundle, so there's no strong reason
-      // to parallelize. onProgress resets to 0 at the start of each
-      // channel's download rather than reporting one running total across
-      // all of them - a deliberate simplification, not an oversight.
-      for (const [channel, update] of Object.entries(result.otaChannels ?? {}) as [ChannelName, MobileOtaChannelUpdate][]) {
-        const path = await downloadToFile(update.asset.browser_download_url, `ota-download-${channel}-${result.version}-${result.buildNumber}.zip`, onProgress, controller.signal);
-        console.log(`[mobile-updater] downloadMobileUpdate: downloaded ${channel} to ${path}, staged`);
-        stagedOtaChannelPaths[channel] = path;
+      await discardStagedOtaDownloads();
+      // Sequential, one channel at a time. Progress is reported per file
+      // (which file, how much of it), so the UI can show every file's own
+      // size and progress rather than one bar that resets per channel.
+      try {
+        for (const [index, item] of items.entries()) {
+          const channel = item.id as ChannelName;
+          const update = result.otaChannels![channel]!;
+          const path = await downloadToFile(
+            update.asset.browser_download_url,
+            `${OTA_DOWNLOAD_PREFIX}${channel}-${result.version}-${result.buildNumber}.zip`,
+            ({ received, total }) => onProgress({ id: channel, index, received, total: item.bytes || total }),
+            controller.signal,
+          );
+          console.log(`[mobile-updater] downloadMobileUpdate: downloaded ${channel} to ${path}, staged`);
+          stagedOtaChannelPaths[channel] = path;
+          if (item.bytes > 0) {
+            onProgress({ id: channel, index, received: item.bytes, total: item.bytes });
+          }
+        }
+      } catch (err) {
+        await discardStagedOtaDownloads(); // a partial set is useless - free the space
+        throw err;
       }
       return;
     }
@@ -611,14 +761,27 @@ export async function downloadMobileUpdate(result: MobileUpdateCheckResult, onPr
     // native-android: download the real APK into app-private cache storage,
     // then hand the path straight to installApk() - no read-back needed here
     // at all, since there's nothing in JS that needs the APK's bytes.
+    await deleteDownloaded(stagedApkPath);
+    stagedApkPath = null;
+    const apkBytes = items[0]?.bytes ?? 0;
     stagedApkPath = await downloadToFile(
       result.apkAsset!.browser_download_url,
-      `update-${result.version}-${result.buildNumber}.apk`,
-      onProgress,
+      `${APK_DOWNLOAD_PREFIX}${result.version}-${result.buildNumber}.apk`,
+      ({ received, total }) => onProgress({ id: "apk", index: 0, received, total: apkBytes || total }),
       controller.signal,
     );
   } finally {
+    signal.removeEventListener("abort", forwardAbort);
     activeDownloadController = null;
+  }
+}
+
+/** Deletes every downloaded-but-not-applied channel zip and forgets it. */
+async function discardStagedOtaDownloads(): Promise<void> {
+  const paths = Object.values(stagedOtaChannelPaths);
+  stagedOtaChannelPaths = {};
+  for (const path of paths) {
+    await deleteDownloaded(path);
   }
 }
 
@@ -626,56 +789,67 @@ export function cancelMobileDownload(): void {
   activeDownloadController?.abort();
 }
 
-// ── Atomic activation and rollback (OTA path only) ──────────────────────
+// ── Activation and rollback (OTA path only) ─────────────────────────────
 //
-// The actual per-channel stage/swap/rollback logic (and why it needs no
-// composed-directory native plugin) lives in ota-parts.ts - this module
-// only orchestrates which channels got downloaded and when to call into
-// it, plus the setBasePath/session-reapply plumbing already in place
-// below.
+// The actual per-channel stage/swap/rollback logic lives in ota-core.ts
+// (via ota-parts.ts) - this module only orchestrates which channels got
+// downloaded and when to call into it, plus the setBasePath/session-reapply
+// plumbing below.
 
 /** OTA (either platform): bootstraps or incrementally applies whichever channels were downloaded, then reloads. Android native fallback: hands the downloaded APK to the system installer (does not install anything itself). iOS notify-only (native-touching releases only): always rejects. */
 export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResult): Promise<void> {
   console.log(`[mobile-updater] applyMobileUpdateAndRelaunch() called with kind="${result.kind}"`);
   if (result.kind === "ota") {
-    const fs = filesystem();
-    if (!fs) {
+    if (!filesystem()) {
       throw new Error("Capacitor Filesystem plugin not available.");
     }
     const otaChannels = result.otaChannels ?? {};
 
-    if (!(await isOtaBootstrapped(fs))) {
-      // First-ever OTA on this install - checkForMobileUpdate() guarantees
-      // all three channels were downloaded for this case (see
-      // resolveOtaChannels), so this is never a partial bootstrap.
-      const zipPaths: Partial<Record<ChannelName, string>> = {};
-      const versions: Partial<Record<ChannelName, string>> = {};
-      for (const channel of CHANNELS) {
-        const update = otaChannels[channel];
-        const path = stagedOtaChannelPaths[channel];
-        if (!update || !path) {
-          throw new Error(`Missing downloaded bootstrap channel "${channel}" - was downloadMobileUpdate() called first?`);
+    try {
+      if (!(await isOtaBootstrapped())) {
+        // First-ever OTA on this install - checkForMobileUpdate() guarantees
+        // all three channels were downloaded for this case (see
+        // resolveOtaChannels), so this is never a partial bootstrap.
+        const zipPaths: Partial<Record<ChannelName, string>> = {};
+        const versions: Partial<Record<ChannelName, string>> = {};
+        const expectations: Partial<Record<ChannelName, UnzipExpectation>> = {};
+        for (const channel of CHANNELS) {
+          const update = otaChannels[channel];
+          const path = stagedOtaChannelPaths[channel];
+          if (!update || !path) {
+            throw new Error(`Missing downloaded bootstrap channel "${channel}" - was downloadMobileUpdate() called first?`);
+          }
+          zipPaths[channel] = path;
+          versions[channel] = update.version;
+          expectations[channel] = update.expect;
         }
-        zipPaths[channel] = path;
-        versions[channel] = update.version;
-      }
-      await bootstrapActive(zipPaths as Record<ChannelName, string>, versions as Record<ChannelName, string>);
-    } else {
-      for (const [channel, update] of Object.entries(otaChannels) as [ChannelName, MobileOtaChannelUpdate][]) {
-        const path = stagedOtaChannelPaths[channel];
-        if (!path) {
-          throw new Error(`Missing downloaded channel "${channel}" - was downloadMobileUpdate() called first?`);
+        await bootstrapActive(zipPaths as Record<ChannelName, string>, versions as Record<ChannelName, string>, expectations, getInstalledNativeFingerprint());
+      } else {
+        for (const channel of CHANNELS) {
+          const update = otaChannels[channel];
+          if (!update) {
+            continue;
+          }
+          const path = stagedOtaChannelPaths[channel];
+          if (!path) {
+            throw new Error(`Missing downloaded channel "${channel}" - was downloadMobileUpdate() called first?`);
+          }
+          await applyChannelUpdate(channel, path, update.version, update.expect);
         }
-        await applyChannelUpdate(channel, path, update.version);
       }
+    } finally {
+      // Applied or failed, the zips have served their purpose: everything
+      // they contained is now unzipped under ota/, or the attempt is being
+      // abandoned and a retry downloads afresh. Either way they are dead
+      // weight (500MB+ for a first OTA) in the cache directory.
+      await discardStagedOtaDownloads();
     }
 
     // Activate immediately - don't rely on the boot-hook reapply below to
     // do this on the NEXT launch, since this is the first time this
     // version's files exist at all and nothing has pointed the WebView at
-    // them yet. Mirrors the original single-bundle code's
-    // stageAndActivateOta(), which called setBasePath directly here too.
-    await setBasePath(await getActiveDirUri(fs));
+    // them yet.
+    await setBasePath(await getActiveDirUri());
     console.log(`[mobile-updater] applyMobileUpdateAndRelaunch: staged+activated, reloading now`);
     window.location.reload();
     return;
@@ -691,7 +865,9 @@ export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResu
     }
     await bridge.installApk({ path: stagedApkPath });
     // Hands off to Android's installer UI here - this process doesn't
-    // control what happens next, the OS does.
+    // control what happens next, the OS does. The APK has to stay on disk
+    // while the installer reads it; sweepStaleDownloads() removes it on the
+    // next launch.
     return;
   }
 
@@ -719,12 +895,15 @@ export async function applyMobileUpdateAndRelaunch(result: MobileUpdateCheckResu
 // served path (ota/active/, shared by all three channels), so the guard
 // is a plain boolean instead of a path comparison.
 const OTA_REAPPLIED_SESSION_KEY = "mobile-updater:reapplied";
+// Set once per launch when the OTA content's own JS has run (see below).
+const OTA_LOAD_MARKED_SESSION_KEY = "mobile-updater:load-marked";
 
 /**
  * Boot hook - call once, early, on every cold launch (gated on
  * Capacitor.isNativePlatform()). Delegates the actual per-channel
- * reapply/rollback bookkeeping to ota-parts.ts's reapplyActivePartsIfAny();
- * this wrapper's only job is the session-guard above setBasePath.
+ * recovery/reapply/rollback bookkeeping to ota-parts.ts's
+ * reapplyActivePartsIfAny(); this wrapper owns the session guard above
+ * setBasePath, and the "the new content's JS ran" signal.
  *
  * The session flag is only set when reapplyActivePartsIfAny() reports it
  * actually called setBasePath - NOT unconditionally after calling it. A
@@ -736,23 +915,38 @@ const OTA_REAPPLIED_SESSION_KEY = "mobile-updater:reapplied";
  * exactly what caused a bootstrap OTA to silently fail to activate until
  * a manual force-close/reopen, confirmed on-device.
  *
- * NOTE: this only runs from JS (patches/mobile/node/mobile-ota-updater.js's
+ * NOTE: this only runs from JS (patches/all/node/mobile-ota-updater.js's
  * main.ts hook), which means it only executes AFTER the WebView has already
  * loaded its initial page from whatever base path was active at launch - and, per the
  * OTA_REAPPLIED_SESSION_KEY guard above, calling setBasePath() here forces exactly one
  * extra reload per real cold launch to switch over, never more.
+ *
+ * That same structure gives the rollback logic its "did the new content
+ * get to run at all" signal for free: this function finding the session
+ * flag already set means it is being called by the page that loaded AFTER
+ * the switch - i.e. by the OTA content's own main.ts. A launch that gets
+ * that far and is then closed before the title screen (slow first load,
+ * impatient user) is counted separately from one where the new content
+ * never ran, and is given more chances before the update is rolled back -
+ * see ota-core.ts's two thresholds.
  */
 export async function reapplyActiveOtaBundleIfAny(): Promise<void> {
   try {
     if (sessionStorage.getItem(OTA_REAPPLIED_SESSION_KEY) === "1") {
       console.log(`[mobile-updater] reapplyActiveOtaBundleIfAny: already reapplied this session - skipping`);
+      if (sessionStorage.getItem(OTA_LOAD_MARKED_SESSION_KEY) !== "1") {
+        sessionStorage.setItem(OTA_LOAD_MARKED_SESSION_KEY, "1");
+        await markPartsLoadReached().catch(err => console.error(`[mobile-updater] markPartsLoadReached failed:`, err));
+      }
       return;
     }
   } catch {
     // sessionStorage unavailable - fall through and apply as normal.
   }
 
-  const didActivate = await reapplyActivePartsIfAny(setBasePath);
+  await sweepStaleDownloads();
+
+  const didActivate = await reapplyActivePartsIfAny(setBasePath, getInstalledNativeFingerprint());
   if (!didActivate) {
     return;
   }

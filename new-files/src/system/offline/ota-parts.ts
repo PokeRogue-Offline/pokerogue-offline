@@ -1,107 +1,61 @@
 /**
- * Generalizes mobile-updater.ts's single-bundle stage/activate/confirm/
- * rollback lifecycle (see that file's doc comment) into three independent
- * channels - code, assets, locales - so a release that only changed code
- * doesn't force re-downloading the (much larger) assets/locales bundles,
- * and vice versa. See the "Split mobile OTA updates" plan for the full
- * rationale, including the real release-history data behind it.
+ * Mobile (Capacitor) binding for the OTA state machine in ota-core.ts.
  *
- * ── Why this needs no new native code ────────────────────────────────────
- * The WebView can only be pointed at ONE served directory at a time
- * (setBasePath in mobile-updater.ts), so all three channels have to end up
- * living together under a single directory, `ota/active/`. Rather than
- * composing that directory from three separately-staged version dirs
- * (which would need symlink/hardlink support this codebase doesn't have a
- * plugin for), each channel's zip is unzipped so its own files land
- * DIRECTLY under `ota/active/` - and because each channel's zip only ever
- * contains that channel's own top-level entries (code's zip never
- * contains images/, assets' zip never contains index.html - see
- * scripts/split-ota-bundle.js's classification tables), applying a
- * channel's update can never touch another channel's files.
+ * The web content is split into three independently-updatable channels -
+ * code, assets, locales - so a release that only changed code doesn't
+ * force re-downloading the (much larger) assets/locales bundles.
  *
- * An update to one channel therefore reduces to: move that channel's
- * CURRENT top-level entries aside into a backup directory (a plain
- * rename - stock @capacitor/filesystem, no custom native plugin), unzip
- * the new version into a scratch staging directory, then move the staged
- * entries into `ota/active/` (also a plain rename). Both renames are
- * same-filesystem directory-entry operations, not byte copies - cheap
- * regardless of how large the channel's content is, same property
- * hardlinking would have given us, with no new native code at all.
+ * ── Why one served directory ─────────────────────────────────────────────
+ * The WebView can only be pointed at ONE directory at a time (setBasePath
+ * in mobile-updater.ts), so all three channels live together under
+ * `ota/active/`. Each channel's zip only ever contains that channel's own
+ * top-level entries (see scripts/split-ota-bundle.js's classification
+ * tables), so applying one channel can never touch another channel's
+ * files.
  *
- * ── Two lifecycles, not one ──────────────────────────────────────────────
- * - BOOTSTRAP (no confirmed OTA installed yet): identical in spirit to
- *   today's single-bundle logic - unzip all three channel zips together
- *   into a fresh `ota/active/`, and on repeated boot failure, abandon the
- *   whole thing and fall back to the originally-bundled app content
- *   (never call setBasePath again) - there's nothing to roll back to
- *   PARTIALLY yet, since this is the first OTA ever applied on this
- *   install.
- * - INCREMENTAL (an OTA is already confirmed and active): each channel
- *   updates independently via the backup/stage/swap dance above. A boot
- *   failure rolls back only the channel(s) that were mid-update - the
- *   backup directory's own saved pointer (see applyChannelUpdate below)
- *   is restored verbatim, and the other, already-confirmed channels are
- *   never touched.
+ * ── What an update does ──────────────────────────────────────────────────
+ * 1. Unzip the new version into a scratch staging directory (native
+ *    plugin, with a size check before and an entry-count check after).
+ * 2. Write a write-ahead marker.
+ * 3. Move the channel's current entries into a backup directory, then the
+ *    staged entries into `ota/active/`. These are same-filesystem renames
+ *    (stock @capacitor/filesystem), not byte copies.
+ * 4. Write the channel's pointer, unconfirmed, then remove the marker.
+ *
+ * Steps 3-4 are several separate renames, so the app CAN be killed with
+ * the channel half swapped. That state is detected by the marker on the
+ * next launch and rolled back (or forward, if the pointer had already
+ * been written) before anything is served - see ota-core.ts for the
+ * mechanics, which are shared with the desktop build.
+ *
+ * ── Two lifecycles ───────────────────────────────────────────────────────
+ * - BOOTSTRAP (no OTA installed yet): all three channel zips are unzipped
+ *   into a fresh `ota/active/`. If that version never boots, the whole
+ *   thing is discarded and the app's originally-bundled content is served
+ *   again.
+ * - INCREMENTAL: each channel updates independently as above. A version
+ *   that never boots is rolled back to the last CONFIRMED version of that
+ *   channel only; the other channels are not touched.
  */
 
-export type ChannelName = "code" | "assets" | "locales";
+import {
+  ACTIVE_DIR,
+  CHANNELS,
+  type ChannelName,
+  type ChannelPointer,
+  type OtaFs,
+  type UnzipExpectation,
+  applyChannelUpdate as coreApplyChannelUpdate,
+  bootstrapActive as coreBootstrapActive,
+  confirmBootSuccess,
+  isOtaBootstrapped as coreIsOtaBootstrapped,
+  markLoadReached,
+  prepareBoot,
+  readChannelPointer as coreReadChannelPointer,
+} from "#system/offline/ota-core";
 
-export const CHANNELS: ChannelName[] = ["code", "assets", "locales"];
-
-/**
- * Top-level `ota/active/` entries each channel owns - MUST stay in sync
- * with scripts/split-ota-bundle.js's ASSET_ENTRIES/LOCALE_ENTRIES/
- * CODE_ENTRIES tables (that script is the source of truth for what ships
- * in each channel's zip; this is a deliberate, small, rarely-changing
- * duplication rather than sharing one file across the Node CI script and
- * this app bundle). Only used here to know which entries to move aside
- * when backing up a channel before swapping in a new version - never used
- * to classify anything, since every entry actually arriving in a
- * channel's zip already belongs to that channel by construction.
- */
-const CHANNEL_TOP_LEVEL_ENTRIES: Record<ChannelName, string[]> = {
-  code: ["index.html", "assets", "service-worker.js", "favicon.ico", "robots.txt", "asset-manifest.json"],
-  assets: [
-    "images",
-    "audio",
-    "fonts",
-    "battle-anims",
-    "logo128.png",
-    "logo512.png",
-    "manifest.webmanifest",
-    "biome-bgm-loop-points.json",
-    "exp-sprites.json",
-    "starter-colors.json",
-    "test",
-  ],
-  locales: ["locales"],
-};
-
-export interface ChannelPointer {
-  version: string;
-  bootAttempts: number;
-  confirmed: boolean;
-}
-
-const OTA_DIR = "ota";
-const ACTIVE_DIR = `${OTA_DIR}/active`;
-const BOOT_ATTEMPT_THRESHOLD = 2;
-
-function pointerPath(channel: ChannelName): string {
-  return `${OTA_DIR}/active-${channel}.json`;
-}
-
-function backupPointerPath(channel: ChannelName): string {
-  return `${OTA_DIR}/backup-${channel}.json`;
-}
-
-function backupDirPath(channel: ChannelName): string {
-  return `${OTA_DIR}/backup-${channel}`;
-}
-
-function stagingDirPath(channel: ChannelName): string {
-  return `${OTA_DIR}/staging-${channel}`;
-}
+export { CHANNELS };
+export type { ChannelName, ChannelPointer, UnzipExpectation };
 
 function cap(): any {
   return typeof window !== "undefined" ? (window as any).Capacitor : undefined;
@@ -115,246 +69,182 @@ function otaUnzip(): any {
   return cap()?.Plugins?.OtaUnzip;
 }
 
-async function readJson<T>(fs: any, path: string): Promise<T | null> {
+function log(message: string): void {
+  console.log(`[ota-parts] ${message}`);
+}
+
+/** ota-core's filesystem, on top of the stock Capacitor Filesystem plugin (app-private DATA directory) and the OtaUnzip plugin. */
+function createCapacitorOtaFs(fs: any, unzip: any): OtaFs {
+  const directory = "DATA";
+  return {
+    async readText(path) {
+      try {
+        const { data } = await fs.readFile({ path, directory, encoding: "utf8" });
+        return typeof data === "string" ? data : null;
+      } catch {
+        return null;
+      }
+    },
+    async writeText(path, data) {
+      await fs.writeFile({ path, data, directory, encoding: "utf8", recursive: true });
+    },
+    async exists(path) {
+      try {
+        await fs.stat({ path, directory });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async rename(from, to) {
+      await fs.rename({ from, to, directory, toDirectory: directory });
+    },
+    async rmrf(path) {
+      let type: string;
+      try {
+        ({ type } = await fs.stat({ path, directory }));
+      } catch {
+        return; // already gone
+      }
+      if (type === "directory") {
+        await fs.rmdir({ path, directory, recursive: true });
+      } else {
+        await fs.deleteFile({ path, directory });
+      }
+    },
+    async mkdirp(path) {
+      await fs.mkdir({ path, directory, recursive: true }).catch(() => {});
+    },
+    async unzip(zipPath, destDir, expect) {
+      if (!unzip) {
+        throw new Error("Capacitor OtaUnzip plugin not available.");
+      }
+      const { uri } = await fs.getUri({ path: destDir, directory });
+      const options: Record<string, unknown> = { sourcePath: zipPath, destDir: uri };
+      if (expect?.bytes !== undefined) {
+        options.expectedBytes = expect.bytes;
+      }
+      if (expect?.entries !== undefined) {
+        options.expectedEntries = expect.entries;
+      }
+      return unzip.unzip(options);
+    },
+  };
+}
+
+function otaFs(): OtaFs | null {
+  const fs = filesystem();
+  return fs ? createCapacitorOtaFs(fs, otaUnzip()) : null;
+}
+
+function requireOtaFs(): OtaFs {
+  const fs = otaFs();
+  if (!fs || !otaUnzip()) {
+    throw new Error("Capacitor Filesystem/OtaUnzip plugin not available.");
+  }
+  return fs;
+}
+
+/** The one directory every channel's files live under, and the path the WebView's base path points at once any OTA is active. */
+export async function getActiveDirUri(): Promise<string> {
+  const { uri } = await filesystem().getUri({ path: ACTIVE_DIR, directory: "DATA" });
+  return uri;
+}
+
+/** True once a complete OTA (all three channels) is installed - see the two-lifecycles note above. */
+export async function isOtaBootstrapped(): Promise<boolean> {
+  const fs = otaFs();
+  return fs ? coreIsOtaBootstrapped(fs) : false;
+}
+
+export async function readChannelPointer(channel: ChannelName): Promise<ChannelPointer | null> {
+  const fs = otaFs();
+  return fs ? coreReadChannelPointer(fs, channel) : null;
+}
+
+/**
+ * Free bytes on the volume holding app data, or null when it can't be
+ * determined (callers then skip their free-space check rather than block
+ * an update on it). The number never leaves the device.
+ */
+export async function getFreeBytes(): Promise<number | null> {
   try {
-    const { data } = await fs.readFile({ path, directory: "DATA", encoding: "utf8" });
-    return JSON.parse(data as string);
+    const result = await otaUnzip()?.freeSpace?.();
+    return typeof result?.bytes === "number" && result.bytes >= 0 ? result.bytes : null;
   } catch {
     return null;
   }
 }
 
-async function writeJson(fs: any, path: string, value: unknown): Promise<void> {
-  await fs.writeFile({ path, data: JSON.stringify(value), directory: "DATA", encoding: "utf8", recursive: true });
-}
-
-export async function readChannelPointer(fs: any, channel: ChannelName): Promise<ChannelPointer | null> {
-  return readJson<ChannelPointer>(fs, pointerPath(channel));
-}
-
-async function writeChannelPointer(fs: any, channel: ChannelName, pointer: ChannelPointer): Promise<void> {
-  await writeJson(fs, pointerPath(channel), pointer);
-}
-
-async function rmrf(fs: any, path: string): Promise<void> {
-  await fs.rmdir({ path, directory: "DATA", recursive: true }).catch(() => {});
-}
-
 /**
- * Moves `entries` (top-level names under `fromDir`) into the same-named
- * paths under `toDir`, via the stock Filesystem.rename - a plain
- * directory-entry move, not a byte copy. Entries that don't currently
- * exist under `fromDir` are skipped (e.g. a channel's very first apply
- * has nothing yet to move aside).
+ * First-ever OTA apply: unzips all three downloaded channel zips into a
+ * fresh `ota/active/`, then writes all three pointers unconfirmed.
  */
-async function moveEntries(fs: any, entries: string[], fromDir: string, toDir: string): Promise<void> {
-  await fs.mkdir({ path: toDir, directory: "DATA", recursive: true }).catch(() => {});
-  for (const entry of entries) {
-    const from = `${fromDir}/${entry}`;
-    const to = `${toDir}/${entry}`;
-    try {
-      await fs.stat({ path: from, directory: "DATA" });
-    } catch {
-      continue; // nothing to move for this entry
-    }
-    await fs.rename({ from, to, directory: "DATA", toDirectory: "DATA" });
-  }
+export async function bootstrapActive(
+  channelZipPaths: Record<ChannelName, string>,
+  versions: Record<ChannelName, string>,
+  expectations: Partial<Record<ChannelName, UnzipExpectation>>,
+  shellIdentity: string | null,
+): Promise<void> {
+  const fs = requireOtaFs();
+  await coreBootstrapActive(
+    fs,
+    async activeDir => {
+      for (const channel of CHANNELS) {
+        const expect = expectations[channel];
+        const { entryCount } = await fs.unzip(channelZipPaths[channel], activeDir, expect);
+        if (expect?.entries !== undefined && entryCount !== expect.entries) {
+          throw new Error(`OTA ${channel} zip is incomplete: expected ${expect.entries} entries, got ${entryCount}.`);
+        }
+        log(`bootstrapActive: unzipped ${channel} (${entryCount} entries)`);
+      }
+    },
+    versions,
+    { shellIdentity, log },
+  );
 }
 
-/** The one directory every channel's files live under, and the path the WebView's base path always ultimately points at once any OTA is active. */
-export async function getActiveDirUri(fs: any): Promise<string> {
-  const { uri } = await fs.getUri({ path: ACTIVE_DIR, directory: "DATA" });
-  return uri;
-}
-
-/** True once a confirmed OTA has ever been activated on this install - see the two-lifecycles note above. */
-export async function isOtaBootstrapped(fs: any): Promise<boolean> {
-  for (const channel of CHANNELS) {
-    if (await readChannelPointer(fs, channel)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * First-ever OTA apply: unzips all three downloaded channel zips directly
- * into a fresh `ota/active/`, then writes all three pointers unconfirmed.
- * Mirrors today's single-bundle stageAndActivateOta() almost exactly - the
- * only difference is three unzip calls into the same destDir instead of
- * one, which is safe precisely because each zip only contains its own
- * channel's entries (see this file's doc comment).
- */
-export async function bootstrapActive(channelZipPaths: Record<ChannelName, string>, versions: Record<ChannelName, string>): Promise<string> {
-  const fs = filesystem();
-  const unzip = otaUnzip();
-  if (!fs || !unzip) {
-    throw new Error("Capacitor Filesystem/OtaUnzip plugin not available.");
-  }
-
-  await rmrf(fs, ACTIVE_DIR); // abandon any half-written previous bootstrap attempt
-  const { uri } = await fs.getUri({ path: ACTIVE_DIR, directory: "DATA" });
-
-  try {
-    for (const channel of CHANNELS) {
-      const { entryCount } = await unzip.unzip({ sourcePath: channelZipPaths[channel], destDir: uri });
-      console.log(`[ota-parts] bootstrapActive: unzipped ${channel} (${entryCount} entries) into ${uri}`);
-    }
-  } catch (err) {
-    console.error(`[ota-parts] bootstrapActive: unzip failed, abandoning ${ACTIVE_DIR}:`, err);
-    await rmrf(fs, ACTIVE_DIR);
-    throw err;
-  }
-
-  // Point of no return for the bootstrap path - everything above is
-  // abandonable (the previously-bundled app content is still what's
-  // served until a pointer is written and reapplyActivePartsIfAny() runs).
-  for (const channel of CHANNELS) {
-    await writeChannelPointer(fs, channel, { version: versions[channel], bootAttempts: 0, confirmed: false });
-  }
-
-  return uri;
+/** Incremental update to ONE channel, once an OTA is already bootstrapped. Leaves the other two channels untouched on disk. */
+export async function applyChannelUpdate(channel: ChannelName, zipPath: string, newVersion: string, expect?: UnzipExpectation): Promise<void> {
+  await coreApplyChannelUpdate(requireOtaFs(), channel, zipPath, newVersion, { expect, log });
 }
 
 /**
- * Incremental update to ONE channel, once an OTA is already bootstrapped.
- * Backs the channel's current entries AND current pointer up (so a boot
- * failure can restore both verbatim), unzips the new version into a
- * scratch staging dir, then swaps staged entries into `ota/active/`.
- * Leaves the other two channels completely untouched on disk.
- */
-export async function applyChannelUpdate(channel: ChannelName, zipPath: string, newVersion: string): Promise<void> {
-  const fs = filesystem();
-  const unzip = otaUnzip();
-  if (!fs || !unzip) {
-    throw new Error("Capacitor Filesystem/OtaUnzip plugin not available.");
-  }
-
-  const entries = CHANNEL_TOP_LEVEL_ENTRIES[channel];
-  const staging = stagingDirPath(channel);
-  const backup = backupDirPath(channel);
-
-  await rmrf(fs, staging); // abandon any half-written previous attempt for this channel
-  const { uri: stagingUri } = await fs.getUri({ path: staging, directory: "DATA" });
-
-  try {
-    const { entryCount } = await unzip.unzip({ sourcePath: zipPath, destDir: stagingUri });
-    console.log(`[ota-parts] applyChannelUpdate(${channel}): unzipped ${entryCount} entries into ${stagingUri}`);
-  } catch (err) {
-    console.error(`[ota-parts] applyChannelUpdate(${channel}): unzip failed, abandoning staging dir:`, err);
-    await rmrf(fs, staging);
-    throw err;
-  }
-
-  // Save what's currently installed for this channel (files AND pointer)
-  // before touching anything live - this is what a boot failure restores.
-  await rmrf(fs, backup);
-  const previousPointer = await readChannelPointer(fs, channel);
-  await moveEntries(fs, entries, ACTIVE_DIR, backup);
-  if (previousPointer) {
-    await writeJson(fs, backupPointerPath(channel), previousPointer);
-  }
-
-  // Point of no return for this channel - the backup above is now the
-  // only copy of the previous version; everything from here swaps the new
-  // one in.
-  await moveEntries(fs, entries, staging, ACTIVE_DIR);
-  await rmrf(fs, staging);
-  await writeChannelPointer(fs, channel, { version: newVersion, bootAttempts: 0, confirmed: false });
-  console.log(`[ota-parts] applyChannelUpdate(${channel}): swapped in version ${newVersion}`);
-}
-
-/** Restores a channel's previous files+pointer from its backup (see applyChannelUpdate), or just abandons it if this was the channel's first-ever apply (no backup exists). */
-async function rollbackChannel(fs: any, channel: ChannelName): Promise<void> {
-  const entries = CHANNEL_TOP_LEVEL_ENTRIES[channel];
-  const backup = backupDirPath(channel);
-  const previousPointer = await readJson<ChannelPointer>(fs, backupPointerPath(channel));
-
-  await moveEntries(fs, entries, ACTIVE_DIR, `${OTA_DIR}/discarded-${channel}`); // move the broken version out of the way first
-  await rmrf(fs, `${OTA_DIR}/discarded-${channel}`);
-
-  if (previousPointer) {
-    await moveEntries(fs, entries, backup, ACTIVE_DIR);
-    await writeChannelPointer(fs, channel, previousPointer);
-    console.warn(`[ota-parts] rollbackChannel(${channel}): restored previous version ${previousPointer.version}`);
-  } else {
-    // First-ever apply of this channel failed to boot - nothing to roll
-    // back to. This only matters post-bootstrap (a channel updated for
-    // the first time after bootstrap, as opposed to all three failing
-    // together during bootstrap itself - see reapplyActivePartsIfAny).
-    await fs.deleteFile({ path: pointerPath(channel), directory: "DATA" }).catch(() => {});
-    console.warn(`[ota-parts] rollbackChannel(${channel}): no backup to restore - channel left empty`);
-  }
-  await rmrf(fs, backup);
-  await fs.deleteFile({ path: backupPointerPath(channel), directory: "DATA" }).catch(() => {});
-}
-
-/**
- * Boot hook - call once, early, on every cold launch (gated on
- * Capacitor.isNativePlatform()), same as today's
- * reapplyActiveOtaBundleIfAny(). Rolls back any channel that's repeatedly
- * failed to confirm, then (if `ota/active/` exists at all) calls
- * setBasePath exactly once for the whole directory - never once per
- * channel, since both platforms' setServerBasePath forces an immediate
- * WebView reload every call (see mobile-updater.ts's
- * OTA_REAPPLIED_SESSION_KEY comment for the loop that caused on-device).
+ * Boot hook - call once, early, on every cold launch. Finishes or undoes
+ * an interrupted update, discards OTA content left over from a different
+ * native build, rolls back any channel that has repeatedly failed to
+ * confirm, then (if a complete `ota/active/` is left) calls setBasePath
+ * exactly once for the whole directory - never once per channel, since
+ * both platforms' setServerBasePath forces an immediate WebView reload
+ * every call (see mobile-updater.ts's OTA_REAPPLIED_SESSION_KEY comment).
  *
  * Returns whether setBasePath was actually called - the caller's own
- * session guard must only consider a reapply "done" when this is true,
- * never unconditionally (a truly fresh install, with no pointers at all
- * yet, legitimately has nothing to reapply and returns false here).
+ * session guard must only consider a reapply "done" when this is true.
  */
-export async function reapplyActivePartsIfAny(setBasePath: (path: string) => Promise<void>): Promise<boolean> {
-  const fs = filesystem();
+export async function reapplyActivePartsIfAny(setBasePath: (path: string) => Promise<void>, shellIdentity: string | null): Promise<boolean> {
+  const fs = otaFs();
   if (!fs) {
     return false;
   }
-
-  let anyPointerExists = false;
-  for (const channel of CHANNELS) {
-    const pointer = await readChannelPointer(fs, channel);
-    if (!pointer) {
-      continue;
-    }
-    anyPointerExists = true;
-
-    if (!pointer.confirmed && pointer.bootAttempts >= BOOT_ATTEMPT_THRESHOLD) {
-      console.warn(`[ota-parts] reapplyActivePartsIfAny: ${channel} never confirmed after ${pointer.bootAttempts} attempts - rolling back`);
-      await rollbackChannel(fs, channel);
-      continue;
-    }
-
-    await writeChannelPointer(fs, channel, { ...pointer, bootAttempts: pointer.bootAttempts + 1 });
-  }
-
-  // If every channel just got abandoned on its very first (bootstrap)
-  // apply, ota/active/ may now be empty/partial - same "fall through to
-  // bundled assets" behavior as today when nothing is left to serve.
-  const anyPointerLeft = (await Promise.all(CHANNELS.map(c => readChannelPointer(fs, c)))).some(Boolean);
-  if (!anyPointerLeft) {
-    if (anyPointerExists) {
-      await rmrf(fs, ACTIVE_DIR);
-    }
+  if (!(await prepareBoot(fs, { shellIdentity, log }))) {
     return false;
   }
-
-  await setBasePath(await getActiveDirUri(fs));
+  await setBasePath(await getActiveDirUri());
   return true;
 }
 
-/** Call once gameplay/title-screen readiness is reached. Confirms every unconfirmed channel and clears its now-superseded backup. */
-export async function confirmPartsBootSuccess(): Promise<void> {
-  const fs = filesystem();
-  if (!fs) {
-    return;
+/** Records that this launch got as far as running the OTA content's own JS. Call at most once per launch. */
+export async function markPartsLoadReached(): Promise<void> {
+  const fs = otaFs();
+  if (fs) {
+    await markLoadReached(fs);
   }
-  for (const channel of CHANNELS) {
-    const pointer = await readChannelPointer(fs, channel);
-    if (!pointer || pointer.confirmed) {
-      continue;
-    }
-    await writeChannelPointer(fs, channel, { ...pointer, confirmed: true, bootAttempts: 0 });
-    await rmrf(fs, backupDirPath(channel));
-    await fs.deleteFile({ path: backupPointerPath(channel), directory: "DATA" }).catch(() => {});
+}
+
+/** Call once the title screen is reached. Confirms every unconfirmed channel and clears its now-superseded backup. */
+export async function confirmPartsBootSuccess(): Promise<void> {
+  const fs = otaFs();
+  if (fs) {
+    await confirmBootSuccess(fs);
   }
 }

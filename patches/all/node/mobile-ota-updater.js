@@ -32,6 +32,7 @@
  * Targets: pokerogue-src/src/main.ts
  *          pokerogue-src/src/system/offline/mobile-updater.ts (new file)
  *          pokerogue-src/src/system/offline/ota-parts.ts (new file)
+ *          pokerogue-src/src/system/offline/ota-core.ts (new file)
  *          pokerogue-src/src/ui/mobile-update-overlay.ts (new file)
  */
 
@@ -95,6 +96,24 @@ if (fs.existsSync(OTA_PARTS_PATH)) {
     "utf8",
   );
   writeFile(OTA_PARTS_PATH, otaPartsSrc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-patch 1a-2: src/system/offline/ota-core.ts (new file) - the platform-
+// independent OTA state machine ota-parts.ts (sub-patch 1a above) is a thin
+// Capacitor binding for. The desktop builds use the same file, transpiled to
+// CommonJS for the Electron main process (scripts/transpile-ota-core.js).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OTA_CORE_PATH = path.join("pokerogue-src", "src", "system", "offline", "ota-core.ts");
+if (fs.existsSync(OTA_CORE_PATH)) {
+  console.log("SKIP ota-core.ts — already exists");
+} else {
+  const otaCoreSrc = fs.readFileSync(
+    path.join(NEW_FILES_DIR, "src", "system", "offline", "ota-core.ts"),
+    "utf8",
+  );
+  writeFile(OTA_CORE_PATH, otaCoreSrc);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

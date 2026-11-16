@@ -10,6 +10,7 @@ import { isScoomDev } from "#system/offline/scooom-dev";
 const OWNER = "PokeRogue-Offline";
 const REPO = "pokerogue-offline";
 const RELEASES_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=100`;
+const LATEST_RELEASE_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 
 // Tags look like "v1.12.0.8-224" ({app version}-{CI build number}); a few
 // historical tags only have a 3-part version ("v1.11.22-189").
@@ -120,6 +121,38 @@ async function fetchAllReleases(): Promise<GhRelease[]> {
 }
 
 /**
+ * One small request that answers the common case - "nothing new" - without
+ * paging the whole release list on every launch. GitHub's "latest" release
+ * is the newest published, non-prerelease one, which is exactly what a
+ * stable build is allowed to see; if its tag is not ahead of the installed
+ * build, neither is anything else.
+ *
+ * Returns false (meaning "go and fetch the full list") whenever that can't
+ * be established: dev builds (dev releases are prereleases and never
+ * "latest"), a failed request, or an unexpected response.
+ */
+async function latestStableIsNotNewer(installedVersion: string, installedBuildNumber: number): Promise<boolean> {
+  if (isScoomDev) {
+    return false;
+  }
+  try {
+    const response = await fetch(LATEST_RELEASE_URL);
+    if (!response.ok) {
+      return false;
+    }
+    const latest = (await response.json()) as Partial<GhRelease> | null;
+    const match = typeof latest?.tag_name === "string" ? latest.tag_name.match(TAG_PATTERN) : null;
+    if (!match) {
+      return false;
+    }
+    const cmp = compareVersions(match[1], installedVersion);
+    return cmp === -1 || (cmp === 0 && Number.parseInt(match[2], 10) <= installedBuildNumber);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Returns the maintainer-authored changelog for a release, or a graceful
  * fallback when none has been added yet: the release's own body with the
  * marker lines and its own download-asset lines stripped out.
@@ -164,6 +197,12 @@ export async function checkForUpdates(
   installedVersion: string,
   installedBuildNumber: number,
 ): Promise<ReleaseInfo[]> {
+  if (await latestStableIsNotNewer(installedVersion, installedBuildNumber)) {
+    return [];
+  }
+
+  // Something newer exists (or the shortcut couldn't tell): the full list
+  // is needed for the changelog of every version in between.
   const releases = await fetchAllReleases();
 
   const pattern = tagPattern();
