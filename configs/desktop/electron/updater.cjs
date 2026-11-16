@@ -347,6 +347,23 @@ function relaunchAndExit(execPath) {
   app.exit(0);
 }
 
+/**
+ * The path that starts this app again, for a plain restart (no binary
+ * swap). Not process.execPath on Windows or Linux: there the running
+ * executable is a temporary copy - the portable build's unpacked files, or
+ * the AppImage's mounted filesystem - that goes away when this process
+ * exits, so the launcher the user started is what has to be run again.
+ */
+function getRelaunchExecPath() {
+  if (process.platform === 'win32') {
+    return getWindowsExecutablePath();
+  }
+  if (process.platform === 'linux' && process.env.APPIMAGE) {
+    return process.env.APPIMAGE;
+  }
+  return process.execPath;
+}
+
 /** Progress can outlive the window it was started from (closed mid-download) - sending to a destroyed one throws. */
 function sendToWindow(win, channel, payload) {
   if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
@@ -462,4 +479,11 @@ function registerUpdater(mainWindow) {
   });
 }
 
-module.exports = { registerUpdater };
+module.exports = {
+  registerUpdater,
+  getInstalledVersion,
+  getInstalledBuildNumber,
+  isDevBuild,
+  getRelaunchExecPath,
+  relaunchAndExit,
+};

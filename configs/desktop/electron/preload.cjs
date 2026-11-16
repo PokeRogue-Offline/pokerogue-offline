@@ -42,6 +42,29 @@ contextBridge.exposeInMainWorld('pkrOffline', {
   /** Swaps the verified download into place and relaunches — only call after downloadUpdate() has resolved. */
   applyUpdateAndRelaunch: () => ipcRenderer.invoke('updater-apply-and-relaunch'),
 
+  /**
+   * Content updater (ota-desktop.cjs). Given the version/build the running
+   * content reports, resolves to null (nothing newer), { kind: 'binary' }
+   * (use the self-updater above) or { kind: 'ota', version, buildNumber,
+   * files: [{ id, bytes }], staged } (a content-only update).
+   */
+  otaCheck: (installedVersion, installedBuildNumber) => ipcRenderer.invoke('ota-check', installedVersion, installedBuildNumber),
+
+  /** Downloads, verifies and stages the content update otaCheck() found. Nothing changes until the next launch. Progress via onOtaProgress. */
+  otaDownload: () => ipcRenderer.invoke('ota-download'),
+
+  /** Aborts an in-flight otaDownload() call. */
+  otaCancel: () => ipcRenderer.send('ota-cancel'),
+
+  /** Replaces any previous listener rather than stacking, like onUpdateProgress. */
+  onOtaProgress: cb => {
+    ipcRenderer.removeAllListeners('ota-progress');
+    ipcRenderer.on('ota-progress', (_e, data) => cb(data));
+  },
+
+  /** Restarts the app so a staged content update is applied. */
+  otaRestart: () => ipcRenderer.invoke('ota-restart'),
+
   /** Pushed whenever the title screen is entered/left, so main.cjs can enable/disable the Tools > Check for Updates menu item. */
   notifyTitleScreenState: isTitleScreen => ipcRenderer.send('title-screen-state', isTitleScreen),
 

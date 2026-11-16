@@ -62,6 +62,14 @@ declare global {
       cancelDownload: () => void;
       onUpdateProgress: (callback: (progress: { received: number; total: number }) => void) => void;
       applyUpdateAndRelaunch: () => Promise<void>;
+      // Content updater (configs/desktop/electron/ota-desktop.cjs) - same
+      // consumer. Optional: the web content can be newer than the shell
+      // it runs in, so a shell from before these existed must still work.
+      otaCheck?: (installedVersion: string, installedBuildNumber: number) => Promise<DesktopOtaCheckResult | null>;
+      otaDownload?: () => Promise<{ version: string; buildNumber: number }>;
+      otaCancel?: () => void;
+      onOtaProgress?: (callback: (progress: DesktopOtaProgress) => void) => void;
+      otaRestart?: () => Promise<void>;
       // Electron Tools-menu integration (main.cjs's "Check for Updates" item)
       // - see patches/all/node/update-check.js for the only consumer.
       notifyTitleScreenState: (isTitleScreen: boolean) => void;
@@ -80,6 +88,25 @@ declare global {
     };
   }
 }
+
+/** One file of a desktop content update: an OTA channel zip. */
+export interface DesktopOtaFile {
+  id: "code" | "assets" | "locales";
+  /** Size in bytes; 0 when not known. */
+  bytes: number;
+}
+
+export type DesktopOtaCheckResult =
+  /** The release needs the full-binary self-updater. */
+  | { kind: "binary"; version?: string; buildNumber?: number }
+  /** A content-only update. `staged` means it is already downloaded and only waiting for a restart. */
+  | { kind: "ota"; version: string; buildNumber: number; files: DesktopOtaFile[]; staged: boolean };
+
+export type DesktopOtaProgress =
+  | { phase: "download"; id: DesktopOtaFile["id"]; index: number; received: number; total: number }
+  /** First content update only: the bundled content is being copied out so it can be updated. */
+  | { phase: "prepare"; received: number; total: number }
+  | { phase: "unpack"; id: DesktopOtaFile["id"]; index: number };
 
 export function isCapacitor(): boolean {
   return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
