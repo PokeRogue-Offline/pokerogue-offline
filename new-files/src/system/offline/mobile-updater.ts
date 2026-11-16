@@ -216,7 +216,7 @@ export interface MobileOtaChannelUpdate {
   /** Size of the zip in bytes (manifest, else the GitHub asset's own size); 0 when neither is known. */
   bytes: number;
   /** Size of the channel once unzipped, when the manifest says. */
-  unpackedBytes?: number;
+  unpackedBytes?: number | undefined;
   /** What the native unzip must find: the zip's exact size and its number of file entries. Absent fields are not checked. */
   expect: UnzipExpectation;
 }

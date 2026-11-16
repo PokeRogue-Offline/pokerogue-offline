@@ -344,8 +344,8 @@ export async function bootstrapActive(
 }
 
 export interface ApplyOptions {
-  expect?: UnzipExpectation;
-  log?: OtaLog;
+  expect?: UnzipExpectation | undefined;
+  log?: OtaLog | undefined;
 }
 
 /** Throws away whatever is staged for the channel, complete or not. */
@@ -394,7 +394,7 @@ export async function stageChannel(fs: OtaFs, channel: ChannelName, zipPath: str
  * version being replaced never confirmed, it is thrown away and the backup
  * that was taken before it is kept.
  */
-export async function swapStagedChannel(fs: OtaFs, channel: ChannelName, newVersion: string, options: { log?: OtaLog } = {}): Promise<void> {
+export async function swapStagedChannel(fs: OtaFs, channel: ChannelName, newVersion: string, options: { log?: OtaLog | undefined } = {}): Promise<void> {
   const entries = CHANNEL_TOP_LEVEL_ENTRIES[channel];
   const staging = stagingDirPath(channel);
   const backup = backupDirPath(channel);
@@ -746,7 +746,7 @@ export interface ChannelSize {
   /** Size of the channel's zip. */
   bytes: number;
   /** Size of the channel's files once unzipped, when the manifest says. */
-  unpackedBytes?: number;
+  unpackedBytes?: number | undefined;
 }
 
 /**
