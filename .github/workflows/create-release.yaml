@@ -414,6 +414,15 @@ jobs:
           gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > appimage.zip
           unzip appimage.zip -d appimage-out
           mv "appimage-out/PokeRogueOffline${TAG}.AppImage" "./PokeRogueOffline${TAG}.AppImage"
+          # Desktop content-update channels + manifest. Built once, by the
+          # AppImage job, for all three desktop platforms (dist/ is the same
+          # content on each). Like the mobile OTA assets, the names carry no
+          # "-dev" suffix: dev and stable are kept apart by the release tag
+          # and the manifest's own `channel` field.
+          mv "appimage-out/ota-desktop-code.zip" "./PokeRogueOffline-Desktop-ota-code.zip"
+          mv "appimage-out/ota-desktop-assets.zip" "./PokeRogueOffline-Desktop-ota-assets.zip"
+          mv "appimage-out/ota-desktop-locales.zip" "./PokeRogueOffline-Desktop-ota-locales.zip"
+          mv "appimage-out/ota-desktop-manifest.json" "./PokeRogueOffline-Desktop-ota-manifest.json"
           
       - name: Download Windows EXE artifact
         env:
@@ -609,6 +618,9 @@ jobs:
             PokeRogueOffline-iOS-ota-assets.zip \
             PokeRogueOffline-iOS-ota-locales.zip \
             PokeRogueOffline-iOS-ota.zip \
+            PokeRogueOffline-Desktop-ota-code.zip \
+            PokeRogueOffline-Desktop-ota-assets.zip \
+            PokeRogueOffline-Desktop-ota-locales.zip \
             > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -642,7 +654,8 @@ jobs:
             - **PokeRogueOffline-x64.app.tar.gz** / **PokeRogueOffline-arm64.app.tar.gz** — macOS app bundle, used only by the in-app self-updater (not for manual install — use the DMG for that)
             - **PokeRogueOffline-{Android,iOS}-ota-{code,assets,locales}.zip** + their `-ota-manifest.json` — the mobile in-app updater's three independently-updatable channels (code/assets/locales), so a code-only update doesn't force re-downloading the (much larger) assets or locales bundles (not for manual install)
             - **PokeRogueOffline-{Android,iOS}-ota.zip** — legacy combined bundle kept only for installs still running an in-app updater from before the code/assets/locales split; not used by current clients, not for manual install
-            - **SHA256SUMS.txt** — checksums for the sixteen files above (excluding the two `-ota-manifest.json` files, which carry their own per-channel checksums)
+            - **PokeRogueOffline-Desktop-ota-{code,assets,locales}.zip** + `PokeRogueOffline-Desktop-ota-manifest.json` — the same three channels for the Windows, Linux and macOS apps' in-app content updater (one set for all three; not for manual install)
+            - **SHA256SUMS.txt** — checksums for the nineteen files above (excluding the three `-ota-manifest.json` files, which carry their own per-channel checksums)
             - Build provenance for each binary is attested via GitHub Actions — verify with `gh attestation verify <file> --repo ${{ github.repository }}`
 
           files: |
@@ -664,6 +677,10 @@ jobs:
             PokeRogueOffline-iOS-ota-locales.zip
             PokeRogueOffline-iOS-ota.zip
             PokeRogueOffline-iOS-ota-manifest.json
+            PokeRogueOffline-Desktop-ota-code.zip
+            PokeRogueOffline-Desktop-ota-assets.zip
+            PokeRogueOffline-Desktop-ota-locales.zip
+            PokeRogueOffline-Desktop-ota-manifest.json
             SHA256SUMS.txt
 
         env:

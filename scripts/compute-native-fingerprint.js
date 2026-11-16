@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * compute-native-fingerprint.js android|ios
+ * compute-native-fingerprint.js android|ios|desktop
  *
  * Prints a SHA-256 hex digest over a fixed, explicit list of this overlay
  * repo's own files that can change what the installed native shell (Capacitor
@@ -11,6 +11,15 @@
  * mobile OTA update is safe to hot-swap the web bundle in place (fingerprint
  * unchanged since the installed build) or needs a real reinstall
  * (fingerprint changed) - see new-files/src/system/offline/mobile-updater.ts.
+ *
+ * `desktop` is the same idea for the Electron builds: a hash over the shell
+ * (the main-process files, the Electron/builder/runtime-dependency version
+ * pins, the packaging configs). A release whose desktop fingerprint equals
+ * an installed shell's is delivered to it as a content update; any other
+ * release replaces the whole application - see
+ * configs/desktop/electron/ota-desktop.cjs. There is ONE desktop
+ * fingerprint for Windows, Linux and macOS, because there is one set of
+ * desktop OTA assets for all three.
  *
  * Deliberately only reads files in THIS repo's own tree (never the upstream
  * pokerogue-src checkout, and never the Android/iOS projects Capacitor
@@ -64,6 +73,25 @@ const INPUTS = {
     "configs/capacitor-plugins/ota-unzip/android/src/main/AndroidManifest.xml",
     "configs/capacitor-plugins/ota-unzip/android/src/main/java/com/pokerogueoffline/plugins/otaunzip/OtaUnzipPlugin.java",
   ],
+  desktop: [
+    // The main process and its preload: everything that runs outside dist/.
+    "configs/desktop/electron/main.cjs",
+    "configs/desktop/electron/preload.cjs",
+    "configs/desktop/electron/updater.cjs",
+    "configs/desktop/electron/update-io.cjs",
+    "configs/desktop/electron/discord-rpc.cjs",
+    "configs/desktop/electron/ota-desktop.cjs",
+    // Shipped to mobile as web content, but on desktop it is transpiled
+    // into the shell (ota-core.cjs) and runs in the main process.
+    "new-files/src/system/offline/ota-core.ts",
+    "scripts/transpile-ota-core.js",
+    // What gets packaged, and how, per platform.
+    "configs/desktop/electron/electron-builder.windows.json",
+    "configs/desktop/electron/electron-builder.appimage.json",
+    "configs/desktop/electron/electron-builder.macos.json",
+    // Electron itself, electron-builder, and the shell's runtime dependencies.
+    "configs/desktop/versions.env",
+  ],
   ios: [
     "scripts/patch-ios-appdelegate.py",
     "scripts/configure-ios-infoplist.sh",
@@ -96,6 +124,14 @@ const EXCLUDED = {
     "scripts/apply-post-build-patches.sh": "Runs dist/ patches only.",
     "scripts/compute-native-fingerprint.js": "This script. Its output changes when INPUTS does, which is the point.",
     "scripts/split-ota-bundle.js": "Packages dist/ for OTA; does not touch the native project.",
+  },
+  desktop: {
+    "docs/": "App icon images. Cosmetic.",
+    "scripts/apply-patches.sh": "Runs the web-content patches only.",
+    "scripts/apply-post-build-patches.sh": "Runs dist/ patches only.",
+    "scripts/compute-native-fingerprint.js": "This script. Its output changes when INPUTS does, which is the point.",
+    "scripts/split-ota-bundle.js": "Packages dist/ for OTA; does not touch the shell.",
+    "scripts/sed-lib.sh": "Placeholder-substitution helpers.",
   },
   ios: {
     "docs/": "App icon images and the AltStore source. Cosmetic / distribution metadata.",

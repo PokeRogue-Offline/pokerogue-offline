@@ -45,6 +45,15 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm
 
+      # Same idea as the mobile builds' native fingerprint: a hash over
+      # everything that makes up the Electron shell. A release whose
+      # fingerprint matches an installed shell can be delivered to it as a
+      # content-only update; any other release replaces the whole app.
+      - name: Compute desktop shell fingerprint
+        id: desktop_fingerprint
+        shell: bash
+        run: echo "fingerprint=$(node scripts/compute-native-fingerprint.js desktop)" >> $GITHUB_OUTPUT
+
       - name: Configure pnpm to avoid macOS hardlink EINVAL flake
         run: pnpm config set package-import-method copy
 
@@ -72,13 +81,22 @@ jobs:
 
       - name: Install Electron dependencies
         working-directory: pokerogue-src
-        run: pnpm add -D electron@43.0.0 electron-builder@26.15.3
+        shell: bash
+        # Versions come from configs/desktop/versions.env, which is part of
+        # the desktop shell fingerprint.
+        run: |
+          source "${{ github.workspace }}/configs/desktop/versions.env"
+          pnpm add -D electron@$ELECTRON_VERSION electron-builder@$ELECTRON_BUILDER_VERSION
 
-      - name: Install Discord Rich Presence dependency
+      - name: Install shell runtime dependencies
         working-directory: pokerogue-src
-        # Not a devDependency - discord-rpc.cjs requires() this at runtime
-        # in the packaged app, so it needs to actually ship in node_modules.
-        run: pnpm add @xhayper/discord-rpc@1.5.1
+        shell: bash
+        # Not devDependencies - discord-rpc.cjs and ota-desktop.cjs require()
+        # these at runtime in the packaged app, so they need to actually ship
+        # in node_modules.
+        run: |
+          source "${{ github.workspace }}/configs/desktop/versions.env"
+          pnpm add @xhayper/discord-rpc@$DISCORD_RPC_VERSION yauzl@$YAUZL_VERSION
 
       - name: Install Capacitor plugin stub for shared code resolution
         working-directory: pokerogue-src
@@ -133,6 +151,11 @@ jobs:
           cp ${{ github.workspace }}/configs/desktop/electron/discord-rpc.cjs pokerogue-src/discord-rpc.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/electron-builder.macos.json pokerogue-src/electron-builder.json
           cp ${{ github.workspace }}/docs/appIcon.icns pokerogue-src/appIcon.icns
+
+      - name: Stage content-updater shell files
+        uses: ./.github/actions/stage-desktop-ota
+        with:
+          fingerprint: ${{ steps.desktop_fingerprint.outputs.fingerprint }}
 
       - name: Inject build number into updater.cjs
         uses: ./.github/actions/inject-build-number-banner
