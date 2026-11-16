@@ -63,12 +63,7 @@ if [[ "$PLATFORM" == "mobile" || "$PLATFORM" == "android" ]]; then
   # Targeted Patches
   apply_patch "native-save-io.js"            mobile
   apply_patch "background-audio-pause.js"    mobile
-  # DISABLED on this branch: its main.ts anchor expects the quad-tap import
-  # (enableTouchControlsOnQuadrupleTap), which upstream main does not have,
-  # so the patch aborts the whole mobile build. Re-enable once the anchor is
-  # fixed or upstream ships that import. The mobile screenshot button is
-  # simply absent while this is off; nothing else depends on it.
-  # apply_patch "screenshot-button.js"         mobile
+  apply_patch "screenshot-button.js"         mobile
   if [[ "$MEMORY_PATCHES_ENABLED" == "true" ]]; then
     apply_patch "skip-legacy-ui-duplicate-textures.js" mobile
   fi
