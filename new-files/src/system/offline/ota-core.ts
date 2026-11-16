@@ -16,6 +16,7 @@
  *   ota/backup-<ch>/            last CONFIRMED version of the channel
  *   ota/backup-<ch>.json        pointer that goes with that backup
  *   ota/staging-<ch>/           scratch unzip target
+ *   ota/staged-<ch>.json        says staging-<ch>/ holds a complete version
  *   ota/discarded-<ch>/         scratch for entries being thrown away
  *   ota/inprogress-<ch>.json    write-ahead marker for a swap or rollback
  *   ota/inprogress-bootstrap.json  write-ahead marker for a bootstrap
@@ -110,6 +111,10 @@ interface SwapMarker {
   restorePointer: ChannelPointer | null;
 }
 
+interface StagedStamp {
+  version: string;
+}
+
 interface BootstrapMarker {
   id: string;
 }
@@ -149,6 +154,9 @@ function stagingDirPath(channel: ChannelName): string {
 }
 function discardedDirPath(channel: ChannelName): string {
   return `${OTA_DIR}/discarded-${channel}`;
+}
+function stagedStampPath(channel: ChannelName): string {
+  return `${OTA_DIR}/staged-${channel}.json`;
 }
 function markerPath(channel: ChannelName): string {
   return `${OTA_DIR}/inprogress-${channel}.json`;
@@ -264,7 +272,7 @@ export async function wipeAll(fs: OtaFs): Promise<void> {
   for (const channel of CHANNELS) {
     await fs.rmrf(backupDirPath(channel));
     await removeJson(fs, backupPointerPath(channel));
-    await fs.rmrf(stagingDirPath(channel));
+    await discardStaged(fs, channel);
     await fs.rmrf(discardedDirPath(channel));
     await removeJson(fs, markerPath(channel));
   }
@@ -304,7 +312,7 @@ export async function bootstrapActive(
   for (const channel of CHANNELS) {
     await fs.rmrf(backupDirPath(channel));
     await removeJson(fs, backupPointerPath(channel));
-    await fs.rmrf(stagingDirPath(channel));
+    await discardStaged(fs, channel);
     await fs.rmrf(discardedDirPath(channel));
     await removeJson(fs, markerPath(channel));
   }
@@ -340,32 +348,60 @@ export interface ApplyOptions {
   log?: OtaLog;
 }
 
-/**
- * Replaces ONE channel's content with the version in `zipPath`. The other
- * two channels are not touched.
- *
- * The backup always ends up holding the last CONFIRMED version: when the
- * version being replaced never confirmed, it is thrown away and the backup
- * that was taken before it is kept.
- */
-export async function applyChannelUpdate(fs: OtaFs, channel: ChannelName, zipPath: string, newVersion: string, options: ApplyOptions = {}): Promise<void> {
-  const entries = CHANNEL_TOP_LEVEL_ENTRIES[channel];
-  const staging = stagingDirPath(channel);
-  const backup = backupDirPath(channel);
-  const discarded = discardedDirPath(channel);
+/** Throws away whatever is staged for the channel, complete or not. */
+export async function discardStaged(fs: OtaFs, channel: ChannelName): Promise<void> {
+  // Stamp first: without it the directory is just scratch space.
+  await removeJson(fs, stagedStampPath(channel));
+  await fs.rmrf(stagingDirPath(channel));
+}
 
-  // 1. Stage. Nothing live is touched; a failure here is abandoned freely.
-  await fs.rmrf(staging);
+/** The version fully staged for the channel and waiting to be swapped in, or null. */
+export async function readStagedVersion(fs: OtaFs, channel: ChannelName): Promise<string | null> {
+  const stamp = await readJson<StagedStamp>(fs, stagedStampPath(channel));
+  return stamp && typeof stamp.version === "string" ? stamp.version : null;
+}
+
+/**
+ * Step 1 of an update: unzips `zipPath` into the channel's staging
+ * directory and stamps it as complete. Nothing live is touched, so this is
+ * safe to do while the current content is in use, and a failure or a kill
+ * part-way is simply abandoned (no stamp, so the directory is never used).
+ */
+export async function stageChannel(fs: OtaFs, channel: ChannelName, zipPath: string, newVersion: string, options: ApplyOptions = {}): Promise<void> {
+  const staging = stagingDirPath(channel);
+  await discardStaged(fs, channel);
   try {
     await fs.mkdirp(staging);
     const { entryCount } = await fs.unzip(zipPath, staging, options.expect);
     if (options.expect?.entries !== undefined && entryCount !== options.expect.entries) {
       throw new Error(`OTA ${channel} zip is incomplete: expected ${options.expect.entries} entries, got ${entryCount}.`);
     }
-    options.log?.(`applyChannelUpdate(${channel}): staged ${entryCount} entries`);
+    options.log?.(`stageChannel(${channel}): staged ${entryCount} entries`);
   } catch (err) {
     await fs.rmrf(staging);
     throw err;
+  }
+  const stamp: StagedStamp = { version: newVersion };
+  await writeJson(fs, stagedStampPath(channel), stamp);
+}
+
+/**
+ * Step 2 of an update: swaps the staged version of ONE channel into
+ * `ota/active/`. Only renames - no unzipping - so it is quick however
+ * large the channel is. The other two channels are not touched.
+ *
+ * The backup always ends up holding the last CONFIRMED version: when the
+ * version being replaced never confirmed, it is thrown away and the backup
+ * that was taken before it is kept.
+ */
+export async function swapStagedChannel(fs: OtaFs, channel: ChannelName, newVersion: string, options: { log?: OtaLog } = {}): Promise<void> {
+  const entries = CHANNEL_TOP_LEVEL_ENTRIES[channel];
+  const staging = stagingDirPath(channel);
+  const backup = backupDirPath(channel);
+  const discarded = discardedDirPath(channel);
+
+  if ((await readStagedVersion(fs, channel)) !== newVersion) {
+    throw new Error(`No staged ${channel} content for version ${newVersion}.`);
   }
 
   // 2. Decide what the backup will be, before anything moves.
@@ -406,7 +442,7 @@ export async function applyChannelUpdate(fs: OtaFs, channel: ChannelName, zipPat
 
   // 5. Move the staged entries in.
   await moveEntries(fs, entries, staging, ACTIVE_DIR);
-  await fs.rmrf(staging);
+  await discardStaged(fs, channel);
   await fs.rmrf(discarded);
 
   // 6. Commit: the pointer names the new version and carries the marker's id.
@@ -414,7 +450,13 @@ export async function applyChannelUpdate(fs: OtaFs, channel: ChannelName, zipPat
 
   // 7. Done.
   await removeJson(fs, markerPath(channel));
-  options.log?.(`applyChannelUpdate(${channel}): swapped in version ${newVersion}`);
+  options.log?.(`swapStagedChannel(${channel}): swapped in version ${newVersion}`);
+}
+
+/** Stage, then swap: replaces ONE channel's content with the version in `zipPath` in one go. */
+export async function applyChannelUpdate(fs: OtaFs, channel: ChannelName, zipPath: string, newVersion: string, options: ApplyOptions = {}): Promise<void> {
+  await stageChannel(fs, channel, zipPath, newVersion, options);
+  await swapStagedChannel(fs, channel, newVersion, options);
 }
 
 /**
@@ -452,7 +494,7 @@ async function restoreFromMarker(fs: OtaFs, channel: ChannelName, marker: SwapMa
 
   await removeJson(fs, backupPointerPath(channel));
   await fs.rmrf(backup);
-  await fs.rmrf(stagingDirPath(channel));
+  await discardStaged(fs, channel);
   await fs.rmrf(discardedDirPath(channel));
   await removeJson(fs, markerPath(channel));
 }
@@ -503,12 +545,20 @@ export async function recoverInProgress(fs: OtaFs, log?: OtaLog): Promise<void> 
     const pointer = await readChannelPointer(fs, channel);
     if (marker.op === "apply" && pointer && pointer.applyId === marker.id) {
       log?.(`recoverInProgress(${channel}): swap had committed - finishing it`);
-      await fs.rmrf(stagingDirPath(channel));
+      await discardStaged(fs, channel);
       await fs.rmrf(discardedDirPath(channel));
       await removeJson(fs, markerPath(channel));
     } else {
       log?.(`recoverInProgress(${channel}): interrupted ${marker.op} - restoring the backup`);
       await restoreFromMarker(fs, channel, marker, log);
+    }
+  }
+
+  // A staging directory without its stamp is an unzip that never finished.
+  // It will never be used, and can be hundreds of MB.
+  for (const channel of CHANNELS) {
+    if ((await readStagedVersion(fs, channel)) === null) {
+      await discardStaged(fs, channel);
     }
   }
 }
