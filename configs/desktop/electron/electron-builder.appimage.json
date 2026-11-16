@@ -11,6 +11,9 @@
     "main.cjs",
     "preload.cjs",
     "updater.cjs",
+    "update-io.cjs",
+    "ota-desktop.cjs",
+    "ota-core.cjs",
     "discord-rpc.cjs",
     "appIcon.png",
     "node_modules/**/*"

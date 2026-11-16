@@ -1,0 +1,34 @@
+name: Stage desktop OTA shell files
+description: >-
+  Puts the content-updater's main-process files into pokerogue-src for the
+  desktop (Electron) builds: copies ota-desktop.cjs, transpiles the shared
+  OTA state machine (new-files/src/system/offline/ota-core.ts - the same
+  source the mobile apps compile into their web bundle) to ota-core.cjs, and
+  substitutes DESKTOP_FINGERPRINT_PLACEHOLDER with the computed desktop
+  shell fingerprint (see scripts/compute-native-fingerprint.js). Must run
+  after "pnpm install" in pokerogue-src - the transpile step uses the
+  TypeScript package from there.
+inputs:
+  fingerprint:
+    description: 'Computed desktop shell fingerprint to inject'
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FINGERPRINT: ${{ inputs.fingerprint }}
+      run: |
+        source "${{ github.workspace }}/scripts/sed-lib.sh"
+        cd "${{ github.workspace }}"
+        cp configs/desktop/electron/ota-desktop.cjs pokerogue-src/ota-desktop.cjs
+        (cd pokerogue-src && node ../scripts/transpile-ota-core.js ../new-files/src/system/offline/ota-core.ts ota-core.cjs)
+        if ! [[ "$FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "ERROR: desktop fingerprint is not a SHA-256 hex digest: '$FINGERPRINT'" >&2
+          exit 1
+        fi
+        assert_sed pokerogue-src/ota-desktop.cjs DESKTOP_FINGERPRINT_PLACEHOLDER
+        portable_sed_i "s/DESKTOP_FINGERPRINT_PLACEHOLDER/${FINGERPRINT}/g" pokerogue-src/ota-desktop.cjs
+        # Fail the build here rather than ship a shell that cannot load them.
+        node --check pokerogue-src/ota-desktop.cjs
+        node --check pokerogue-src/ota-core.cjs

@@ -10,6 +10,7 @@ import { isScoomDev } from "#system/offline/scooom-dev";
 const OWNER = "PokeRogue-Offline";
 const REPO = "pokerogue-offline";
 const RELEASES_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=100`;
+const LATEST_RELEASE_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 
 // Tags look like "v1.12.0.8-224" ({app version}-{CI build number}); a few
 // historical tags only have a 3-part version ("v1.11.22-189").
@@ -120,9 +121,46 @@ async function fetchAllReleases(): Promise<GhRelease[]> {
 }
 
 /**
- * Returns the maintainer-authored changelog for a release, or a graceful
- * fallback when none has been added yet: the release's own body with the
- * marker lines and its own download-asset lines stripped out.
+ * One small request that answers the common case - "nothing new" - without
+ * paging the whole release list on every launch. GitHub's "latest" release
+ * is the newest published, non-prerelease one, which is exactly what a
+ * stable build is allowed to see; if its tag is not ahead of the installed
+ * build, neither is anything else.
+ *
+ * Returns false (meaning "go and fetch the full list") whenever that can't
+ * be established: dev builds (dev releases are prereleases and never
+ * "latest"), a failed request, or an unexpected response.
+ */
+async function latestStableIsNotNewer(installedVersion: string, installedBuildNumber: number): Promise<boolean> {
+  if (isScoomDev) {
+    return false;
+  }
+  try {
+    const response = await fetch(LATEST_RELEASE_URL);
+    if (!response.ok) {
+      return false;
+    }
+    const latest = (await response.json()) as Partial<GhRelease> | null;
+    const match = typeof latest?.tag_name === "string" ? latest.tag_name.match(TAG_PATTERN) : null;
+    if (!match) {
+      return false;
+    }
+    const cmp = compareVersions(match[1], installedVersion);
+    return cmp === -1 || (cmp === 0 && Number.parseInt(match[2], 10) <= installedBuildNumber);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns the maintainer-authored changelog for a release: the text
+ * between the changelog markers. When the markers are there but nothing
+ * has been written between them yet, that is a plain "no changelog"
+ * message - the rest of the body is the release page's download table and
+ * file notes, not something to show in the game.
+ *
+ * Only a body with no markers at all (an old or hand-written release) falls
+ * back to the body itself, with its download-asset lines stripped out.
  */
 function extractChangelog(body: string | null | undefined): string {
   const text = (body ?? "").replace(/\r\n/g, "\n");
@@ -130,10 +168,11 @@ function extractChangelog(body: string | null | undefined): string {
   const startIdx = text.indexOf(CHANGELOG_START);
   const endIdx = text.indexOf(CHANGELOG_END);
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    // The markers are there, so everything outside them is the release
+    // page's own boilerplate (download table, file notes) - never changelog
+    // text, whether or not a changelog has been written yet.
     const between = text.slice(startIdx + CHANGELOG_START.length, endIdx).trim();
-    if (between.length > 0) {
-      return between;
-    }
+    return between.length > 0 ? between : FALLBACK_NO_CHANGELOG;
   }
 
   const filtered = text
@@ -164,6 +203,12 @@ export async function checkForUpdates(
   installedVersion: string,
   installedBuildNumber: number,
 ): Promise<ReleaseInfo[]> {
+  if (await latestStableIsNotNewer(installedVersion, installedBuildNumber)) {
+    return [];
+  }
+
+  // Something newer exists (or the shortcut couldn't tell): the full list
+  // is needed for the changelog of every version in between.
   const releases = await fetchAllReleases();
 
   const pattern = tagPattern();

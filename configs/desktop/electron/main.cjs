@@ -4,7 +4,15 @@ const fs = require('fs');
 const http = require('http');
 const crypto = require('crypto');
 const https = require('https');
-const { registerUpdater } = require('./updater.cjs');
+const {
+  registerUpdater,
+  getInstalledVersion,
+  getInstalledBuildNumber,
+  isDevBuild,
+  getRelaunchExecPath,
+  relaunchAndExit,
+} = require('./updater.cjs');
+const { createDesktopOta, registerDesktopOtaIpc, getShellFingerprint } = require('./ota-desktop.cjs');
 const { registerDiscordRpc } = require('./discord-rpc.cjs');
 
 let mainWindow;
@@ -198,7 +206,41 @@ function buildAppMenu(win) {
   });
 }
 
-function createWindow() {
+// ─────────────────────────────────────────────────────────────────────────
+// Content (dist/) updates - see ota-desktop.cjs. Created lazily because it
+// needs app.getPath(), which is only valid once the app is ready.
+// ─────────────────────────────────────────────────────────────────────────
+
+const BUNDLED_DIST_DIR = path.join(__dirname, 'dist');
+let desktopOta = null;
+
+function getDesktopOta() {
+  if (!desktopOta) {
+    desktopOta = createDesktopOta({
+      userDataDir: app.getPath('userData'),
+      bundledDistDir: BUNDLED_DIST_DIR,
+      shell: {
+        fingerprint: getShellFingerprint(),
+        version: getInstalledVersion(),
+        buildNumber: getInstalledBuildNumber(),
+        dev: isDevBuild(),
+      },
+      apiBase: process.env.POKEROGUE_UPDATE_API_BASE || undefined,
+      log: message => console.log(`[ota] ${message}`),
+    });
+  }
+  return desktopOta;
+}
+
+async function createWindow() {
+  // Before anything is loaded: this is where a content update that was
+  // staged during an earlier run is swapped into place, and where an
+  // interrupted or unbootable one is undone. It only renames directories,
+  // so it does not hold the window up. It never throws - any problem means
+  // "load the bundled content".
+  const ota = getDesktopOta();
+  const launch = await ota.prepareLaunch();
+
   const savedState = loadWindowState();
 
   const windowOptions = {
@@ -236,7 +278,44 @@ function createWindow() {
     saveWindowState(mainWindow);
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
+  const bundledIndex = path.join(BUNDLED_DIST_DIR, 'index.html');
+  const win = mainWindow;
+  let servingOta = launch.servingOta;
+
+  win.webContents.on('did-finish-load', () => {
+    if (servingOta) {
+      ota.noteLoadFinished();
+    }
+  });
+  // If the installed content cannot even be loaded, don't leave the user
+  // looking at a blank window: show the bundled content for this run. The
+  // launch has already been counted against the update, and enough of them
+  // roll it back (see ota-core's thresholds). Only before the title screen
+  // has been reached: after that the content has proven itself, and a
+  // failure is something else (a crash mid-game) that swapping to older
+  // content would not fix.
+  const fallBackToBundled = reason => {
+    if (!servingOta || win.isDestroyed() || ota.hasReachedTitle()) {
+      return;
+    }
+    servingOta = false;
+    console.warn(`[ota] installed content failed to load (${reason}) - loading bundled content`);
+    ota.noteLoadFailed();
+    win.loadFile(bundledIndex);
+  };
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _url, isMainFrame) => {
+    if (isMainFrame && errorCode !== -3) {
+      // -3 is ERR_ABORTED: a navigation that was replaced, not a failure.
+      fallBackToBundled(errorDescription);
+    }
+  });
+  win.webContents.on('render-process-gone', (_event, details) => {
+    if (details.reason !== 'clean-exit') {
+      fallBackToBundled(`renderer ${details.reason}`);
+    }
+  });
+
+  win.loadFile(launch.indexPath);
 
   if (process.env.DEBUG) {
     mainWindow.webContents.openDevTools();
@@ -244,10 +323,15 @@ function createWindow() {
 
   buildAppMenu(mainWindow);
   registerUpdater(mainWindow);
+  registerDesktopOtaIpc(ota, {
+    getWindow: () => mainWindow,
+    relaunch: () => relaunchAndExit(getRelaunchExecPath()),
+  });
   registerDiscordRpc();
 }
 
 app.on('ready', createWindow);
+app.on('will-quit', () => desktopOta?.shutdown());
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

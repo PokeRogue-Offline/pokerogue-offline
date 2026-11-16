@@ -414,6 +414,15 @@ jobs:
           gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > appimage.zip
           unzip appimage.zip -d appimage-out
           mv "appimage-out/PokeRogueOffline${TAG}.AppImage" "./PokeRogueOffline${TAG}.AppImage"
+          # Desktop content-update channels + manifest. Built once, by the
+          # AppImage job, for all three desktop platforms (dist/ is the same
+          # content on each). Like the mobile OTA assets, the names carry no
+          # "-dev" suffix: dev and stable are kept apart by the release tag
+          # and the manifest's own `channel` field.
+          mv "appimage-out/ota-desktop-code.zip" "./PokeRogueOffline-Desktop-ota-code.zip"
+          mv "appimage-out/ota-desktop-assets.zip" "./PokeRogueOffline-Desktop-ota-assets.zip"
+          mv "appimage-out/ota-desktop-locales.zip" "./PokeRogueOffline-Desktop-ota-locales.zip"
+          mv "appimage-out/ota-desktop-manifest.json" "./PokeRogueOffline-Desktop-ota-manifest.json"
           
       - name: Download Windows EXE artifact
         env:
@@ -609,6 +618,9 @@ jobs:
             PokeRogueOffline-iOS-ota-assets.zip \
             PokeRogueOffline-iOS-ota-locales.zip \
             PokeRogueOffline-iOS-ota.zip \
+            PokeRogueOffline-Desktop-ota-code.zip \
+            PokeRogueOffline-Desktop-ota-assets.zip \
+            PokeRogueOffline-Desktop-ota-locales.zip \
             > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -633,17 +645,30 @@ jobs:
             <!-- changelog:start -->
             <!-- changelog:end -->
 
-            - **PokeRogueOffline.ipa** — iOS (sideload via SideStore / LiveContainer / Feather)
-            - **PokeRogueOffline.apk** — Android (sideload by enabling "Install unknown apps")
-            - **PokeRogueOffline.AppImage** — Linux AppImage
-            - **PokeRogueOffline.exe** — Windows Portable EXE
-            - **PokeRogueOffline-x64.dmg** — macOS (Intel)
-            - **PokeRogueOffline-arm64.dmg** — macOS (Apple Silicon)
-            - **PokeRogueOffline-x64.app.tar.gz** / **PokeRogueOffline-arm64.app.tar.gz** — macOS app bundle, used only by the in-app self-updater (not for manual install — use the DMG for that)
-            - **PokeRogueOffline-{Android,iOS}-ota-{code,assets,locales}.zip** + their `-ota-manifest.json` — the mobile in-app updater's three independently-updatable channels (code/assets/locales), so a code-only update doesn't force re-downloading the (much larger) assets or locales bundles (not for manual install)
-            - **PokeRogueOffline-{Android,iOS}-ota.zip** — legacy combined bundle kept only for installs still running an in-app updater from before the code/assets/locales split; not used by current clients, not for manual install
-            - **SHA256SUMS.txt** — checksums for the sixteen files above (excluding the two `-ota-manifest.json` files, which carry their own per-channel checksums)
-            - Build provenance for each binary is attested via GitHub Actions — verify with `gh attestation verify <file> --repo ${{ github.repository }}`
+            ### Downloads
+
+            | Platform | Installer | Notes |
+            |---|---|---|
+            | Windows | [PokeRogueOffline${{ steps.suffix.outputs.tag }}.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_meta.outputs.tag_name }}/PokeRogueOffline${{ steps.suffix.outputs.tag }}.exe) | Portable, no install needed |
+            | Linux | [PokeRogueOffline${{ steps.suffix.outputs.tag }}.AppImage](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_meta.outputs.tag_name }}/PokeRogueOffline${{ steps.suffix.outputs.tag }}.AppImage) | Mark as executable, then run |
+            | macOS (Apple Silicon) | [PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.dmg](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_meta.outputs.tag_name }}/PokeRogueOffline${{ steps.suffix.outputs.tag }}-arm64.dmg) |  |
+            | macOS (Intel) | [PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.dmg](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_meta.outputs.tag_name }}/PokeRogueOffline${{ steps.suffix.outputs.tag }}-x64.dmg) |  |
+            | Android | [PokeRogueOffline${{ steps.suffix.outputs.tag }}.apk](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_meta.outputs.tag_name }}/PokeRogueOffline${{ steps.suffix.outputs.tag }}.apk) | Enable "Install unknown apps" |
+            | iOS | [PokeRogueOffline${{ steps.suffix.outputs.tag }}.ipa](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_meta.outputs.tag_name }}/PokeRogueOffline${{ steps.suffix.outputs.tag }}.ipa) | Sideload with SideStore, LiveContainer or Feather |
+
+            Already have the app? It updates itself; you don't need anything from this page.
+
+            <details>
+            <summary>Other files (used by the in-app updater, not for manual install)</summary>
+
+            - `PokeRogueOffline${{ steps.suffix.outputs.tag }}-{x64,arm64}.app.tar.gz`: macOS app bundle for the self-updater
+            - `PokeRogueOffline-{Android,iOS,Desktop}-ota-{code,assets,locales}.zip` and `-ota-manifest.json`: content updates
+            - `PokeRogueOffline-{Android,iOS}-ota.zip`: legacy bundle for old installs
+            - [SHA256SUMS.txt](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_meta.outputs.tag_name }}/SHA256SUMS.txt): checksums for every file except the manifests
+
+            Verify build provenance with `gh attestation verify <file> --repo ${{ github.repository }}`.
+
+            </details>
 
           files: |
             PokeRogueOffline${{ steps.suffix.outputs.tag }}.ipa
@@ -664,6 +689,10 @@ jobs:
             PokeRogueOffline-iOS-ota-locales.zip
             PokeRogueOffline-iOS-ota.zip
             PokeRogueOffline-iOS-ota-manifest.json
+            PokeRogueOffline-Desktop-ota-code.zip
+            PokeRogueOffline-Desktop-ota-assets.zip
+            PokeRogueOffline-Desktop-ota-locales.zip
+            PokeRogueOffline-Desktop-ota-manifest.json
             SHA256SUMS.txt
 
         env:

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * split-ota-bundle.js <android|ios> <distDir> <outDir> <version> <buildNumber> <nativeFingerprint> <channel>
+ * split-ota-bundle.js <android|ios|desktop> <distDir> <outDir> <version> <buildNumber> <nativeFingerprint> <channel>
  *
  * Replaces the old single `zip -r ota-<platform>.zip dist` + hand-written
  * manifest steps in build-android.yml/build-ios.yml. Splits the built
@@ -47,6 +47,24 @@
  * Shipping both shapes in one manifest, and both the split zips AND this
  * combined one, lets old and new clients each read the one file they
  * understand without needing a version gate on the server side.
+ *
+ * ── Truncation guard fields ──────────────────────────────────────────────
+ * Each channel entry also carries `bytes` (size of the zip), `entries`
+ * (number of files in it) and `unpackedBytes`. The mobile zips are
+ * deliberately not checksummed client-side, so these are what catches a
+ * download that was cut short; they also give the update screen each
+ * file's size up front. They are additive: `schemaVersion` stays 2 and
+ * clients that predate them ignore them.
+ *
+ * ── Desktop mode ─────────────────────────────────────────────────────────
+ * `desktop` produces the same three channels for the Electron builds
+ * (configs/desktop/electron/ota-desktop.cjs). dist/ is the same content on
+ * Windows, Linux and macOS, so there is ONE set - ota-desktop-code.zip,
+ * ota-desktop-assets.zip, ota-desktop-locales.zip and
+ * ota-desktop-manifest.json - not one per platform. There is no legacy
+ * bundle and no `otaBundleSha256`: no desktop client predates the split.
+ * `nativeFingerprint` is the desktop shell fingerprint
+ * (compute-native-fingerprint.js desktop).
  */
 
 const fs = require("fs");
@@ -214,8 +232,46 @@ function zipLegacyBundle(distDir, outPath) {
   execFileSync("zip", ["-r", "-X", outPath, path.basename(distDir)], { cwd: path.dirname(distDir), stdio: "inherit" });
 }
 
+/** Streams the file through the hash in fixed-size chunks - the assets zip is 500MB+. */
 function sha256File(filePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  const hash = crypto.createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    let read;
+    while ((read = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, read));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * File count and total size of a staged channel directory. `files` is
+ * exactly what the native unzip plugins count (file entries only - both
+ * skip directory entries, so an empty directory such as dist/test/ does
+ * not count), which is what makes it usable as a truncation check: a zip
+ * cut short at an entry boundary still unzips "successfully", just with
+ * fewer files than this.
+ */
+function measureDirectory(dirPath) {
+  let files = 0;
+  let bytes = 0;
+  function walk(current) {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const abs = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+      } else {
+        files++;
+        bytes += fs.statSync(abs).size;
+      }
+    }
+  }
+  walk(dirPath);
+  return { files, bytes };
 }
 
 function main() {
@@ -223,14 +279,15 @@ function main() {
 
   if (!platform || !distDir || !outDir || !version || !buildNumberStr || !nativeFingerprint || !channelFlag) {
     console.error(
-      "Usage: node split-ota-bundle.js <android|ios> <distDir> <outDir> <version> <buildNumber> <nativeFingerprint> <stable|dev>",
+      "Usage: node split-ota-bundle.js <android|ios|desktop> <distDir> <outDir> <version> <buildNumber> <nativeFingerprint> <stable|dev>",
     );
     process.exit(1);
   }
-  if (platform !== "android" && platform !== "ios") {
-    console.error(`Unknown platform "${platform}" - expected "android" or "ios".`);
+  if (platform !== "android" && platform !== "ios" && platform !== "desktop") {
+    console.error(`Unknown platform "${platform}" - expected "android", "ios" or "desktop".`);
     process.exit(1);
   }
+  const isDesktop = platform === "desktop";
   if (channelFlag !== "stable" && channelFlag !== "dev") {
     console.error(`Unknown channel "${channelFlag}" - expected "stable" or "dev".`);
     process.exit(1);
@@ -266,27 +323,35 @@ function main() {
 
   for (const channel of Object.keys(CHANNELS)) {
     const channelVersion = hashDirectoryContents(path.join(stagingRoot, channel));
-    const zipName = `ota-${channel}.zip`;
+    const zipName = isDesktop ? `ota-desktop-${channel}.zip` : `ota-${channel}.zip`;
     const zipPath = path.join(outDir, zipName);
     console.error(`[split-ota-bundle] ${channel}: content version ${channelVersion}, zipping to ${zipPath}`);
     zipChannel(stagingRoot, channel, zipPath);
+    const measured = measureDirectory(path.join(stagingRoot, channel));
     manifest[channel] = {
       version: channelVersion,
       sha256: sha256File(zipPath),
       assetName: zipName,
+      // Truncation guard + download display (see the header comment).
+      // Additive: schemaVersion stays 2 and older clients ignore them.
+      bytes: fs.statSync(zipPath).size,
+      entries: measured.files,
+      unpackedBytes: measured.bytes,
     };
   }
 
-  // Legacy single-bundle shim (see this file's header comment) - zipped
-  // from distDir directly, NOT from stagingRoot, since it needs every
-  // channel's files together under one "dist/" wrapper, same as the
-  // original pre-split format.
-  const legacyZipPath = path.join(outDir, "ota-legacy.zip");
-  console.error(`[split-ota-bundle] legacy bundle: zipping ${distDir} to ${legacyZipPath}`);
-  zipLegacyBundle(distDir, legacyZipPath);
-  manifest.otaBundleSha256 = sha256File(legacyZipPath);
+  if (!isDesktop) {
+    // Legacy single-bundle shim (see this file's header comment) - zipped
+    // from distDir directly, NOT from stagingRoot, since it needs every
+    // channel's files together under one "dist/" wrapper, same as the
+    // original pre-split format.
+    const legacyZipPath = path.join(outDir, "ota-legacy.zip");
+    console.error(`[split-ota-bundle] legacy bundle: zipping ${distDir} to ${legacyZipPath}`);
+    zipLegacyBundle(distDir, legacyZipPath);
+    manifest.otaBundleSha256 = sha256File(legacyZipPath);
+  }
 
-  const manifestPath = path.join(outDir, `ota-manifest-${platform}.json`);
+  const manifestPath = path.join(outDir, isDesktop ? "ota-desktop-manifest.json" : `ota-manifest-${platform}.json`);
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   console.error(`[split-ota-bundle] wrote ${manifestPath}:`);
   console.error(JSON.stringify(manifest, null, 2));
@@ -294,4 +359,8 @@ function main() {
   fs.rmSync(stagingRoot, { recursive: true, force: true });
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { ASSET_ENTRIES, LOCALE_ENTRIES, CODE_ENTRIES, CHANNELS, channelForEntry, classifyAndStage, hashDirectoryContents, measureDirectory, sha256File };

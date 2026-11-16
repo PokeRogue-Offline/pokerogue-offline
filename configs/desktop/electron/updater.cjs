@@ -1,8 +1,8 @@
 const { app, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { execFile } = require('child_process');
+const { downloadToFile, sha256File, parseChecksums, swapIntoPlace, makeExecutable } = require('./update-io.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────
 // In-Electron self-updater. Replaces this app's own on-disk binary (exe /
@@ -215,12 +215,31 @@ function getMacAppBundlePath() {
   throw new Error('Could not locate the running .app bundle path.');
 }
 
+/**
+ * The file the user actually launches on Windows.
+ *
+ * This app ships as electron-builder's "portable" target: a single exe
+ * that unpacks the real application into a temporary directory and runs it
+ * from there. Inside the running app, process.execPath is therefore the
+ * unpacked copy in that temporary directory - replacing it changes nothing
+ * the user will ever launch again. electron-builder's portable launcher
+ * passes the path of the exe the user started in PORTABLE_EXECUTABLE_FILE;
+ * that is the file to replace and to relaunch. process.execPath is only a
+ * fallback for a build that isn't packaged as portable.
+ */
+function getWindowsExecutablePath() {
+  return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+}
+
 function getInstallDir() {
   if (process.platform === 'darwin') {
     return path.dirname(getMacAppBundlePath());
   }
   if (process.platform === 'linux' && process.env.APPIMAGE) {
     return path.dirname(process.env.APPIMAGE);
+  }
+  if (process.platform === 'win32') {
+    return path.dirname(getWindowsExecutablePath());
   }
   return path.dirname(process.execPath);
 }
@@ -229,47 +248,6 @@ function getStagingDir() {
   // Same volume as the install dir, required for the rename-based swaps
   // below to be atomic (a cross-device rename isn't).
   return path.join(getInstallDir(), '.pokerogue-update-staging');
-}
-
-async function downloadToFile(url, destPath, onProgress, signal) {
-  const response = await fetch(url, { signal });
-  if (!response.ok || !response.body) {
-    throw new Error(`Download failed: HTTP ${response.status}`);
-  }
-  const total = Number(response.headers.get('content-length')) || 0;
-  let received = 0;
-
-  const fileStream = fs.createWriteStream(destPath);
-  try {
-    for await (const chunk of response.body) {
-      received += chunk.length;
-      fileStream.write(chunk);
-      onProgress?.(received, total);
-    }
-  } finally {
-    await new Promise(resolve => fileStream.end(resolve));
-  }
-}
-
-function parseChecksums(text) {
-  const map = new Map();
-  for (const line of text.split('\n')) {
-    const match = line.match(/^([a-f0-9]{64})\s+\*?(.+)$/);
-    if (match) {
-      map.set(match[2].trim(), match[1]);
-    }
-  }
-  return map;
-}
-
-function sha256File(filePath) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash('sha256');
-    const stream = fs.createReadStream(filePath);
-    stream.on('data', chunk => hash.update(chunk));
-    stream.on('end', () => resolve(hash.digest('hex')));
-    stream.on('error', reject);
-  });
 }
 
 function extractTarGz(archivePath, destDir) {
@@ -319,15 +297,15 @@ function cleanupStaleSwap() {
   fs.rmSync(getStagingDir(), { recursive: true, force: true });
 }
 
-/** Swaps the staged download into place and returns the path to relaunch. */
+/**
+ * Swaps the staged download into place and returns the path to relaunch.
+ * Every platform goes through swapIntoPlace(), which puts the original back
+ * if the new one cannot be moved in.
+ */
 async function applyUpdate(stagedPath) {
   if (process.platform === 'win32') {
-    const target = process.execPath;
-    const oldPath = `${target}.old`;
-    fs.rmSync(oldPath, { force: true });
-    fs.renameSync(target, oldPath);
-    fs.renameSync(stagedPath, target);
-    writePendingSwapFlag(oldPath);
+    const target = getWindowsExecutablePath();
+    writePendingSwapFlag(swapIntoPlace(target, stagedPath));
     return target;
   }
 
@@ -336,11 +314,10 @@ async function applyUpdate(stagedPath) {
     if (!target) {
       throw new Error('APPIMAGE environment variable not set - not running as an AppImage, cannot self-update.');
     }
-    const oldPath = `${target}.old`;
-    fs.rmSync(oldPath, { force: true });
-    fs.renameSync(target, oldPath);
-    fs.renameSync(stagedPath, target);
-    writePendingSwapFlag(oldPath);
+    // Before the swap, not after: once the file is at `target` it has to be
+    // launchable, and rename() keeps whatever mode the staged file has.
+    makeExecutable(stagedPath);
+    writePendingSwapFlag(swapIntoPlace(target, stagedPath));
     return target;
   }
 
@@ -357,11 +334,7 @@ async function applyUpdate(stagedPath) {
     }
     const newBundlePath = path.join(extractDir, extractedName);
 
-    const oldPath = `${bundlePath}.old`;
-    fs.rmSync(oldPath, { recursive: true, force: true });
-    fs.renameSync(bundlePath, oldPath);
-    fs.renameSync(newBundlePath, bundlePath);
-    writePendingSwapFlag(oldPath);
+    writePendingSwapFlag(swapIntoPlace(bundlePath, newBundlePath));
 
     return path.join(bundlePath, 'Contents', 'MacOS', path.basename(process.execPath));
   }
@@ -372,6 +345,30 @@ async function applyUpdate(stagedPath) {
 function relaunchAndExit(execPath) {
   app.relaunch({ execPath });
   app.exit(0);
+}
+
+/**
+ * The path that starts this app again, for a plain restart (no binary
+ * swap). Not process.execPath on Windows or Linux: there the running
+ * executable is a temporary copy - the portable build's unpacked files, or
+ * the AppImage's mounted filesystem - that goes away when this process
+ * exits, so the launcher the user started is what has to be run again.
+ */
+function getRelaunchExecPath() {
+  if (process.platform === 'win32') {
+    return getWindowsExecutablePath();
+  }
+  if (process.platform === 'linux' && process.env.APPIMAGE) {
+    return process.env.APPIMAGE;
+  }
+  return process.execPath;
+}
+
+/** Progress can outlive the window it was started from (closed mid-download) - sending to a destroyed one throws. */
+function sendToWindow(win, channel, payload) {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send(channel, payload);
+  }
 }
 
 let registered = false;
@@ -441,11 +438,15 @@ function registerUpdater(mainWindow) {
       await downloadToFile(
         asset.browser_download_url,
         stagedPath,
-        (received, total) => mainWindow.webContents.send('updater-download-progress', { received, total }),
+        (received, total) => sendToWindow(mainWindow, 'updater-download-progress', { received, total, name: assetName }),
         controller.signal,
+        { expectedBytes: asset.size },
       );
 
       const checksumsResponse = await fetch(checksumsAsset.browser_download_url, { signal: controller.signal });
+      if (!checksumsResponse.ok) {
+        throw new Error(`Could not fetch the release checksums: HTTP ${checksumsResponse.status}`);
+      }
       const checksums = parseChecksums(await checksumsResponse.text());
       const expectedHash = checksums.get(assetName);
       if (!expectedHash) {
@@ -478,4 +479,11 @@ function registerUpdater(mainWindow) {
   });
 }
 
-module.exports = { registerUpdater };
+module.exports = {
+  registerUpdater,
+  getInstalledVersion,
+  getInstalledBuildNumber,
+  isDevBuild,
+  getRelaunchExecPath,
+  relaunchAndExit,
+};

@@ -107,6 +107,10 @@ Go to the [Releases](https://github.com/PokeRogue-Offline/pokerogue-offline/rele
 3. Open PokeRogueOffline and navigate to **Pause → Manage Data → Import Save**
 4. Select the exported file
 
+## In-app updates
+
+The apps update themselves from this repo's GitHub releases, with no update server and no tracking. Releases that only change the game's web content are delivered as small content updates on every platform; releases that change the app itself are full updates. On Windows, Linux and macOS a content update is downloaded while you play and installed the next time the game starts. See [docs/OTA.md](docs/OTA.md) for the design.
+
 ## Notes
 
 - This app is for personal use only

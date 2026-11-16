@@ -41,6 +41,15 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm
 
+      # Same idea as the mobile builds' native fingerprint: a hash over
+      # everything that makes up the Electron shell. A release whose
+      # fingerprint matches an installed shell can be delivered to it as a
+      # content-only update; any other release replaces the whole app.
+      - name: Compute desktop shell fingerprint
+        id: desktop_fingerprint
+        shell: bash
+        run: echo "fingerprint=$(node scripts/compute-native-fingerprint.js desktop)" >> $GITHUB_OUTPUT
+
       - name: Clone PokeRogue fork
         run: git clone --recurse-submodules --depth 1 --branch ${{ inputs.branch || 'main' }} https://github.com/pagefaultgames/pokerogue.git pokerogue-src
 
@@ -65,13 +74,22 @@ jobs:
 
       - name: Install Electron dependencies
         working-directory: pokerogue-src
-        run: pnpm add -D electron@43.0.0 electron-builder@26.15.3
+        shell: bash
+        # Versions come from configs/desktop/versions.env, which is part of
+        # the desktop shell fingerprint.
+        run: |
+          source "${{ github.workspace }}/configs/desktop/versions.env"
+          pnpm add -D electron@$ELECTRON_VERSION electron-builder@$ELECTRON_BUILDER_VERSION
 
-      - name: Install Discord Rich Presence dependency
+      - name: Install shell runtime dependencies
         working-directory: pokerogue-src
-        # Not a devDependency - discord-rpc.cjs requires() this at runtime
-        # in the packaged app, so it needs to actually ship in node_modules.
-        run: pnpm add @xhayper/discord-rpc@1.5.1
+        shell: bash
+        # Not devDependencies - discord-rpc.cjs and ota-desktop.cjs require()
+        # these at runtime in the packaged app, so they need to actually ship
+        # in node_modules.
+        run: |
+          source "${{ github.workspace }}/configs/desktop/versions.env"
+          pnpm add @xhayper/discord-rpc@$DISCORD_RPC_VERSION yauzl@$YAUZL_VERSION
 
       - name: Install Capacitor plugin stub for shared code resolution
         working-directory: pokerogue-src
@@ -97,14 +115,40 @@ jobs:
       - name: Apply post-build patches
         run: bash ${{ github.workspace }}/scripts/apply-post-build-patches.sh appimage
 
+      # dist/ is the same content on Windows, Linux and macOS, so the
+      # desktop OTA channel zips and manifest are produced once, here, and
+      # serve all three (see scripts/split-ota-bundle.js's desktop mode).
+      # Must run on the finished dist/ - after the post-build patches.
+      - name: Split desktop OTA bundle into code/assets/locales channels
+        run: |
+          BUILD_NUM=${{ inputs.build_number || github.run_number }}
+          VERSION="${{ steps.pokerogue_version.outputs.version }}"
+          CHANNEL="stable"
+          if [ "${{ inputs.dev }}" = "true" ]; then
+            CHANNEL="dev"
+          fi
+          node ${{ github.workspace }}/scripts/split-ota-bundle.js desktop \
+            pokerogue-src/dist \
+            . \
+            "$VERSION" \
+            "$BUILD_NUM" \
+            "${{ steps.desktop_fingerprint.outputs.fingerprint }}" \
+            "$CHANNEL"
+
       - name: Copy Electron config files into place
         run: |
           cp ${{ github.workspace }}/configs/desktop/electron/main.cjs pokerogue-src/main.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/preload.cjs pokerogue-src/preload.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/updater.cjs pokerogue-src/updater.cjs
+          cp ${{ github.workspace }}/configs/desktop/electron/update-io.cjs pokerogue-src/update-io.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/discord-rpc.cjs pokerogue-src/discord-rpc.cjs
           cp ${{ github.workspace }}/configs/desktop/electron/electron-builder.appimage.json pokerogue-src/electron-builder.json
           cp ${{ github.workspace }}/docs/appIcon.png pokerogue-src/appIcon.png
+
+      - name: Stage content-updater shell files
+        uses: ./.github/actions/stage-desktop-ota
+        with:
+          fingerprint: ${{ steps.desktop_fingerprint.outputs.fingerprint }}
 
       - name: Inject build number into updater.cjs
         uses: ./.github/actions/inject-build-number-banner
@@ -163,5 +207,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PokeRogueOffline-AppImage${{ inputs.dev && '-dev' || '' }}
-          path: ${{ steps.appimage_path.outputs.AppImage }}
+          path: |
+            ${{ steps.appimage_path.outputs.AppImage }}
+            ota-desktop-code.zip
+            ota-desktop-assets.zip
+            ota-desktop-locales.zip
+            ota-desktop-manifest.json
           retention-days: 30
