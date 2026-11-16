@@ -215,12 +215,31 @@ function getMacAppBundlePath() {
   throw new Error('Could not locate the running .app bundle path.');
 }
 
+/**
+ * The file the user actually launches on Windows.
+ *
+ * This app ships as electron-builder's "portable" target: a single exe
+ * that unpacks the real application into a temporary directory and runs it
+ * from there. Inside the running app, process.execPath is therefore the
+ * unpacked copy in that temporary directory - replacing it changes nothing
+ * the user will ever launch again. electron-builder's portable launcher
+ * passes the path of the exe the user started in PORTABLE_EXECUTABLE_FILE;
+ * that is the file to replace and to relaunch. process.execPath is only a
+ * fallback for a build that isn't packaged as portable.
+ */
+function getWindowsExecutablePath() {
+  return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+}
+
 function getInstallDir() {
   if (process.platform === 'darwin') {
     return path.dirname(getMacAppBundlePath());
   }
   if (process.platform === 'linux' && process.env.APPIMAGE) {
     return path.dirname(process.env.APPIMAGE);
+  }
+  if (process.platform === 'win32') {
+    return path.dirname(getWindowsExecutablePath());
   }
   return path.dirname(process.execPath);
 }
@@ -285,7 +304,7 @@ function cleanupStaleSwap() {
  */
 async function applyUpdate(stagedPath) {
   if (process.platform === 'win32') {
-    const target = process.execPath;
+    const target = getWindowsExecutablePath();
     writePendingSwapFlag(swapIntoPlace(target, stagedPath));
     return target;
   }
