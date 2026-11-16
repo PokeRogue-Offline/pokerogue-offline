@@ -214,8 +214,46 @@ function zipLegacyBundle(distDir, outPath) {
   execFileSync("zip", ["-r", "-X", outPath, path.basename(distDir)], { cwd: path.dirname(distDir), stdio: "inherit" });
 }
 
+/** Streams the file through the hash in fixed-size chunks - the assets zip is 500MB+. */
 function sha256File(filePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  const hash = crypto.createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    let read;
+    while ((read = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, read));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * File count and total size of a staged channel directory. `files` is
+ * exactly what the native unzip plugins count (file entries only - both
+ * skip directory entries, so an empty directory such as dist/test/ does
+ * not count), which is what makes it usable as a truncation check: a zip
+ * cut short at an entry boundary still unzips "successfully", just with
+ * fewer files than this.
+ */
+function measureDirectory(dirPath) {
+  let files = 0;
+  let bytes = 0;
+  function walk(current) {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const abs = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+      } else {
+        files++;
+        bytes += fs.statSync(abs).size;
+      }
+    }
+  }
+  walk(dirPath);
+  return { files, bytes };
 }
 
 function main() {
@@ -270,10 +308,16 @@ function main() {
     const zipPath = path.join(outDir, zipName);
     console.error(`[split-ota-bundle] ${channel}: content version ${channelVersion}, zipping to ${zipPath}`);
     zipChannel(stagingRoot, channel, zipPath);
+    const measured = measureDirectory(path.join(stagingRoot, channel));
     manifest[channel] = {
       version: channelVersion,
       sha256: sha256File(zipPath),
       assetName: zipName,
+      // Truncation guard + download display (see the header comment).
+      // Additive: schemaVersion stays 2 and older clients ignore them.
+      bytes: fs.statSync(zipPath).size,
+      entries: measured.files,
+      unpackedBytes: measured.bytes,
     };
   }
 
@@ -294,4 +338,8 @@ function main() {
   fs.rmSync(stagingRoot, { recursive: true, force: true });
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { ASSET_ENTRIES, LOCALE_ENTRIES, CODE_ENTRIES, CHANNELS, channelForEntry, classifyAndStage, hashDirectoryContents, measureDirectory, sha256File };

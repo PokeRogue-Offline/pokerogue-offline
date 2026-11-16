@@ -12,10 +12,22 @@ export interface OtaUnzipPlugin {
    * paths (or file:// URIs) - never Capacitor directory-alias-relative
    * strings, so this plugin needs no knowledge of Capacitor's Filesystem
    * directory semantics. Strips exactly one leading path segment from every
-   * entry (this OTA zip's own `dist/` wrapper - see mobile-updater.ts) and
-   * skips directory entries; `destDir`'s own root then directly contains
-   * index.html. Streams every entry to disk in fixed-size chunks - never
-   * holds a whole entry or the whole archive in memory at once.
+   * entry (the zip's own top-level wrapper directory - see
+   * scripts/split-ota-bundle.js) and skips directory entries. Streams every
+   * entry to disk in fixed-size chunks - never holds a whole entry or the
+   * whole archive in memory at once.
+   *
+   * Truncation guard (the zip is deliberately not checksummed): when
+   * `expectedBytes` is given the file's size is checked BEFORE unzipping,
+   * and when `expectedEntries` is given the number of files extracted is
+   * checked AFTER. Either mismatch rejects. Both come from the release's
+   * OTA manifest.
    */
-  unzip(options: { sourcePath: string; destDir: string }): Promise<{ entryCount: number }>;
+  unzip(options: { sourcePath: string; destDir: string; expectedBytes?: number; expectedEntries?: number }): Promise<{ entryCount: number }>;
+
+  /**
+   * Bytes available to the app on the volume holding its data. Used only
+   * for a local "will this update fit" check before downloading.
+   */
+  freeSpace(): Promise<{ bytes: number }>;
 }
