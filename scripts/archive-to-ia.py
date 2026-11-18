@@ -110,24 +110,24 @@ def fetch_release_by_tag(tag_name):
 def present_files(identifier):
     """
     Return {filename: size_or_None} for the original files already on the IA
-    item, or {} if the item does not exist (or cannot be read).
+    item, or {} if the item does not exist yet.
+
+    Reading a public item needs no credentials. Any error talking to IA is
+    raised, not turned into "item is empty": a wrong answer here would make a
+    dry run (or a resume) report files as missing that are already uploaded.
     """
-    try:
-        item = get_item(identifier, access_key=IA_ACCESS_KEY, secret_key=IA_SECRET_KEY)
-        if not item.exists:
-            return {}
-        out = {}
-        for f in item.files:
-            if f.get("source", "original") != "original":
-                continue  # IA-derived files (thumbnails, torrent, metadata xml)
-            try:
-                out[f["name"]] = int(f["size"])
-            except (KeyError, TypeError, ValueError):
-                out[f["name"]] = None
-        return out
-    except Exception as e:  # network blip: treat as "unknown" and let upload decide
-        print(f"  WARNING: could not read item '{identifier}': {e}")
+    item = get_item(identifier)
+    if not item.exists:
         return {}
+    out = {}
+    for f in item.files:
+        if f.get("source", "original") != "original":
+            continue  # IA-derived files (thumbnails, torrent, metadata xml)
+        try:
+            out[f["name"]] = int(f["size"])
+        except (KeyError, TypeError, ValueError):
+            out[f["name"]] = None
+    return out
 
 
 def missing_assets(assets, present):
