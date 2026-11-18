@@ -5,9 +5,24 @@ name: Archive to Internet Archive
 # filled in and cleaned up, then it's flipped to non-prerelease/latest in the
 # GitHub UI). Never fires for nightly-builds.yml's rolling "nightly" release,
 # since that's always recreated with --prerelease and never promoted.
+#
+# Can also be run by hand (Actions -> Run workflow) for a given tag. The upload
+# is resumable: files already on the IA item are skipped, so re-running after a
+# timeout or a partial upload just finishes the job.
 on:
   release:
     types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to archive (e.g. v1.12.2.8-390)'
+        required: true
+        type: string
+      dry_run:
+        description: 'List which files are present/missing on IA without uploading'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,7 +30,8 @@ permissions:
 jobs:
   archive:
     runs-on: ubuntu-latest
-    if: ${{ github.event.release.tag_name != 'nightly' }}
+    timeout-minutes: 180
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.tag_name != 'nightly' }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -30,16 +46,31 @@ jobs:
 
       - name: Upload release to Internet Archive
         env:
-          IAS3_ACCESS_KEY: ${{ vars.IAS3_ACCESS_KEY }}
-          IAS3_SECRET_KEY: ${{ vars.IAS3_SECRET_KEY }}
-        run: python3 scripts/archive-to-ia.py --event-path "$GITHUB_EVENT_PATH"
+          # Must be repository *secrets* (masked in logs). As plain variables
+          # they were printed in the clear in every run's log.
+          IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
+          IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            ARGS=(--tag "$INPUT_TAG")
+            if [ "$INPUT_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          else
+            ARGS=(--event-path "$GITHUB_EVENT_PATH")
+          fi
+          python3 -u scripts/archive-to-ia.py "${ARGS[@]}"
 
       - name: Notify on failure
         if: failure()
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           curl -H "Title: IA Archive Upload Failed ❌" \
                -H "Tags: warning,skull" \
                -H "Markdown: yes" \
                -H "Click: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-               -d "Failed to archive ${{ github.event.release.tag_name }} to the Internet Archive." \
+               -d "Failed to archive $TAG_NAME to the Internet Archive. Re-run the workflow with this tag to resume." \
                ${{ vars.NTFY_URL }}
